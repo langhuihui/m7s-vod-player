@@ -5,6 +5,7 @@ import { Timeline } from "../timeline";
 // No longer need the timeline prop as we'll create it internally
 const props = defineProps<{
   src?: string;
+  codec?: string;
 }>();
 
 const video = ref<HTMLVideoElement>();
@@ -20,7 +21,13 @@ const isPlaying = ref(false);
 const currentPosition = ref(0);
 const showControls = ref(false);
 const hideControlsTimeout = ref<number | null>(null);
-
+const volume = ref(1);
+const isMuted = ref(false);
+const showPlaybackRateMenu = ref(false);
+const showVolumeSlider = ref(false);
+const isFullscreen = ref(false);
+const isVolumeDragging = ref(false);
+const singleFmp4 = ref(false);
 // Expose video element to parent component
 defineExpose({
   value: video,
@@ -145,6 +152,11 @@ function changePlaybackRate(rate: number) {
 
   playbackRate.value = rate;
   video.value.playbackRate = rate;
+  showPlaybackRateMenu.value = false;
+}
+
+function togglePlaybackRateMenu() {
+  showPlaybackRateMenu.value = !showPlaybackRateMenu.value;
 }
 
 function togglePlay() {
@@ -157,6 +169,76 @@ function togglePlay() {
     video.value.pause();
     isPlaying.value = false;
   }
+}
+
+function toggleMute() {
+  if (!video.value) return;
+
+  isMuted.value = !isMuted.value;
+  video.value.muted = isMuted.value;
+}
+
+function handleVolumeChange(event: MouseEvent) {
+  if (!video.value) return;
+
+  // Get the volume slider element and its dimensions
+  const slider = event.currentTarget as HTMLElement;
+  const rect = slider.getBoundingClientRect();
+  updateVolumeFromPosition(event.clientY, rect);
+}
+
+function updateVolumeFromPosition(clientY: number, rect: DOMRect) {
+  // Calculate volume: 1 at top (minimum clientY), 0 at bottom (maximum clientY)
+  const sliderHeight = rect.height;
+  const volumePercentage =
+    1 - Math.max(0, Math.min(1, (clientY - rect.top) / sliderHeight));
+  const clampedVolume = Math.max(0, Math.min(1, volumePercentage));
+
+  volume.value = clampedVolume;
+  if (video.value) {
+    video.value.volume = clampedVolume;
+
+    // If volume is set to 0, consider it as muted
+    isMuted.value = clampedVolume === 0;
+    video.value.muted = clampedVolume === 0;
+  }
+}
+
+function startVolumeDrag(event: MouseEvent) {
+  event.preventDefault();
+  isVolumeDragging.value = true;
+
+  // Store the slider reference for use during drag
+  const slider = event.currentTarget as HTMLElement;
+  const sliderRect = slider.getBoundingClientRect();
+
+  // Initial volume update
+  updateVolumeFromPosition(event.clientY, sliderRect);
+
+  // Create a handler that uses the stored slider reference
+  const handleDrag = (e: MouseEvent) => {
+    if (isVolumeDragging.value) {
+      updateVolumeFromPosition(e.clientY, sliderRect);
+    }
+  };
+
+  // Add global event listeners for drag tracking
+  document.addEventListener("mousemove", handleDrag);
+
+  const stopDrag = () => {
+    isVolumeDragging.value = false;
+    document.removeEventListener("mousemove", handleDrag);
+    document.removeEventListener("mouseup", stopDrag);
+
+    // Allow the slider to hide if mouse is not over the volume control
+    setTimeout(() => {
+      if (!document.querySelector(".volume-control:hover")) {
+        showVolumeSlider.value = false;
+      }
+    }, 500);
+  };
+
+  document.addEventListener("mouseup", stopDrag);
 }
 
 function seekForward() {
@@ -198,29 +280,43 @@ function handleMouseMove() {
   handleMouseEnter();
 }
 
+function toggleFullscreen() {
+  if (!playerRef.value) return;
+
+  if (!document.fullscreenElement) {
+    playerRef.value
+      .requestFullscreen()
+      .then(() => {
+        isFullscreen.value = true;
+      })
+      .catch((err) => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+      });
+  } else {
+    document
+      .exitFullscreen()
+      .then(() => {
+        isFullscreen.value = false;
+      })
+      .catch((err) => {
+        console.error(`Error attempting to exit fullscreen: ${err.message}`);
+      });
+  }
+}
+
 watch(
   () => (video.value ? props.src : null),
   (src) => {
     if (timeline.value) timeline.value.destroy();
     if (!src) return;
-    console.log(src);
-    fetch(props.src!)
-      .then((res) => res.text())
-      .then((text) => {
-        if (video.value) {
-          timeline.value = new Timeline(
-            video.value,
-            text,
-            new URL(props.src!).origin +
-              new URL(props.src!).pathname.split("/").slice(0, -1).join("/"),
-            {
-              forward: 2,
-              backward: 1,
-            }
-          );
-          currentPosition.value = timeline.value.position;
-        }
+    if (video.value) {
+      const tl = new Timeline(video.value);
+      timeline.value = tl;
+      currentPosition.value = 0;
+      tl.load(src, props.codec).then(() => {
+        singleFmp4.value = tl.singleFmp4;
       });
+    }
   }
 );
 
@@ -237,6 +333,9 @@ onMounted(() => {
   video.value.addEventListener("pause", () => {
     isPlaying.value = false;
   });
+
+  // Initialize volume
+  video.value.volume = volume.value;
 });
 </script>
 
@@ -249,11 +348,11 @@ onMounted(() => {
     @mousemove="handleMouseMove"
   >
     <!-- Video element -->
-    <video ref="video" @click="togglePlay"></video>
+    <video ref="video" @click="togglePlay" :controls="singleFmp4"></video>
 
     <!-- Custom timeline UI -->
     <div
-      v-if="timeline"
+      v-if="timeline && !singleFmp4"
       class="controls-overlay"
       :class="{ 'show-controls': showControls || isDragging }"
     >
@@ -282,37 +381,93 @@ onMounted(() => {
 
       <!-- Controls -->
       <div class="controls-container">
-        <!-- Play/Pause Button -->
-        <button class="control-button" @click="togglePlay">
-          <span v-if="isPlaying" class="bili-icon">暂停</span>
-          <span v-else class="bili-icon">播放</span>
-        </button>
+        <!-- Left side controls -->
+        <div class="controls-left">
+          <!-- Play/Pause Button -->
+          <button class="control-button" @click="togglePlay">
+            <i v-if="isPlaying" class="icon-pause">▮▮</i>
+            <i v-else class="icon-play">▶</i>
+          </button>
 
-        <!-- Rewind Button -->
-        <button class="control-button" @click="seekBackward">
-          <span class="bili-icon">后退</span>
-        </button>
+          <!-- Rewind Button -->
+          <button class="control-button" @click="seekBackward">
+            <i class="icon-backward">◀◀</i>
+          </button>
 
-        <!-- Fast Forward Button -->
-        <button class="control-button" @click="seekForward">
-          <span class="bili-icon">前进</span>
-        </button>
+          <!-- Fast Forward Button -->
+          <button class="control-button" @click="seekForward">
+            <i class="icon-forward">▶▶</i>
+          </button>
 
-        <!-- Current time display -->
-        <div class="time-display">
-          {{ formattedCurrentTime }} / {{ formattedTotalDuration }}
+          <!-- Current time display -->
+          <div class="time-display">
+            {{ formattedCurrentTime }} / {{ formattedTotalDuration }}
+          </div>
         </div>
 
-        <!-- Playback rate control -->
-        <div class="playback-rate">
-          <div class="playback-label">倍速</div>
-          <button
-            v-for="rate in playbackRates"
-            :key="rate"
-            @click="changePlaybackRate(rate)"
-            :class="{ active: playbackRate === rate }"
+        <!-- Right side controls -->
+        <div class="controls-right">
+          <!-- Playback rate control -->
+          <div class="playback-rate-control">
+            <button
+              class="control-button playback-rate-button"
+              @click="togglePlaybackRateMenu"
+            >
+              <span>{{ playbackRate }}x</span>
+            </button>
+            <div class="playback-rate-menu" v-if="showPlaybackRateMenu">
+              <button
+                v-for="rate in playbackRates"
+                :key="rate"
+                @click="changePlaybackRate(rate)"
+                :class="{ active: playbackRate === rate }"
+                class="playback-rate-option"
+              >
+                {{ rate }}x
+              </button>
+            </div>
+          </div>
+
+          <!-- Volume Control -->
+          <div
+            class="volume-control"
+            @mouseenter="showVolumeSlider = true"
+            @mouseleave="
+              () => {
+                if (!isVolumeDragging) {
+                  showVolumeSlider = false;
+                }
+              }
+            "
           >
-            {{ rate }}x
+            <button class="control-button" @click="toggleMute">
+              <i v-if="isMuted || volume === 0" class="icon-volume-mute">🔇</i>
+              <i v-else-if="volume < 0.5" class="icon-volume-low">🔈</i>
+              <i v-else class="icon-volume-high">🔊</i>
+            </button>
+            <div class="volume-slider-container" v-if="showVolumeSlider">
+              <div
+                class="volume-slider"
+                @click="handleVolumeChange"
+                @mousedown="startVolumeDrag"
+              >
+                <div class="volume-slider-track"></div>
+                <div
+                  class="volume-slider-fill"
+                  :style="{ height: `${volume * 100}%` }"
+                ></div>
+                <div
+                  class="volume-slider-thumb"
+                  :style="{ bottom: `${volume * 100}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Fullscreen Button -->
+          <button class="control-button" @click="toggleFullscreen">
+            <i v-if="isFullscreen" class="icon-fullscreen-exit">⤓</i>
+            <i v-else class="icon-fullscreen">⤢</i>
           </button>
         </div>
       </div>
@@ -362,9 +517,16 @@ video {
 .controls-container {
   display: flex;
   align-items: center;
-  gap: 15px;
+  justify-content: space-between;
   padding: 5px 0;
   color: white;
+}
+
+.controls-left,
+.controls-right {
+  display: flex;
+  align-items: center;
+  gap: 15px;
 }
 
 .control-button {
@@ -373,7 +535,7 @@ video {
   color: white;
   padding: 5px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -395,7 +557,6 @@ video {
 .time-display {
   font-size: 12px;
   color: white;
-  margin-left: auto;
 }
 
 .timeline {
@@ -451,35 +612,138 @@ video {
   pointer-events: auto;
 }
 
-.playback-rate {
+/* Playback Rate Control */
+.playback-rate-control {
+  position: relative;
+}
+
+.playback-rate-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.8);
+  border-radius: 4px;
+  padding: 5px;
+  margin-bottom: 5px;
   display: flex;
+  flex-direction: column;
   gap: 5px;
-  align-items: center;
+  z-index: 100;
 }
 
-.playback-label {
-  font-size: 12px;
-  color: white;
-}
-
-.playback-rate button {
+.playback-rate-option {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 4px;
-  padding: 2px 5px;
+  padding: 5px 10px;
   cursor: pointer;
   font-size: 12px;
   color: white;
   transition: all 0.2s;
+  width: 100%;
+  text-align: center;
 }
 
-.playback-rate button:hover {
+.playback-rate-option:hover {
   background-color: rgba(255, 255, 255, 0.2);
 }
 
-.playback-rate button.active {
+.playback-rate-option.active {
   background-color: #fb7299;
   color: white;
   border-color: #fb7299;
+}
+
+/* Volume Control - Fixed vertical implementation */
+.volume-control {
+  position: relative;
+  z-index: 101; /* Ensure this is above other controls for mouseleave detection */
+}
+
+.volume-slider-container {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.8);
+  border-radius: 4px;
+  padding: 15px 10px;
+  margin-bottom: 5px;
+  z-index: 100;
+}
+
+/* Add a pseudo-element to bridge the gap between button and slider container */
+.volume-control:hover .volume-slider-container::after {
+  content: "";
+  position: absolute;
+  bottom: -15px; /* Match margin-bottom of slider container */
+  left: 0;
+  width: 100%;
+  height: 15px;
+  background: transparent;
+}
+
+.volume-slider {
+  position: relative;
+  height: 80px;
+  width: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.volume-slider-track {
+  position: absolute;
+  height: 100%;
+  width: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  left: 3px;
+}
+
+.volume-slider-fill {
+  position: absolute;
+  width: 4px;
+  background: #fb7299;
+  border-radius: 2px;
+  left: 3px;
+  bottom: 0;
+}
+
+.volume-slider-thumb {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fb7299;
+  left: -1px;
+  transform: translateY(50%);
+  cursor: pointer;
+}
+
+.icon-play,
+.icon-pause,
+.icon-forward,
+.icon-backward,
+.icon-volume-high,
+.icon-volume-low,
+.icon-volume-mute,
+.icon-fullscreen,
+.icon-fullscreen-exit {
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Fullscreen styles */
+.video-player:fullscreen {
+  width: 100%;
+  max-width: none;
+}
+
+.video-player:fullscreen video {
+  height: 100vh;
+  object-fit: contain;
 }
 </style>
