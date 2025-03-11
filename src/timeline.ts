@@ -1,4 +1,6 @@
-const EXTINFRegex = /#EXTINF:(\d+\.\d+),(.*?),(.*?)\s*$/;
+import { Fmp4Parser, Track } from "./fmp4-parser";
+import { SoftDecoder } from "./soft-decoder";
+const EXTINFRegex = /#EXTINF:(\d+\.\d+),(.*?)\s*$/;
 
 // 定义接口和类
 export interface SlidingWindowConfig {
@@ -10,7 +12,6 @@ interface MediaSegmentInfo {
   url: string;
   duration: number;
   physicalTime: Date | null;
-  codec: string | null;
 }
 
 class MediaSegment {
@@ -19,16 +20,16 @@ class MediaSegment {
   virtualStartTime: number; // 虚拟时间轴上的开始时间
   virtualEndTime: number;   // 虚拟时间轴上的结束时间
   physicalTime: Date | null; // 物理时间（从EXTINF中解析）
-  codec: string | null;     // 编解码器信息（从EXTINF中解析）
   data?: Promise<ArrayBuffer>;       // 片段的二进制数据
   state: 'init' | 'loading' | 'loaded' | 'buffering' | 'buffered' = 'init';
+  fmp4Parser = new Fmp4Parser(false);
+  tracks: Track[] = [];
   constructor(public index: number, info: MediaSegmentInfo) {
     this.url = info.url;
     this.duration = info.duration;
     this.virtualStartTime = 0;
     this.virtualEndTime = 0;
     this.physicalTime = info.physicalTime;
-    this.codec = info.codec;
   }
   async load(bufferProxy: SourceBufferProxy) {
     this.state = 'loading';
@@ -37,13 +38,66 @@ class MediaSegment {
       this.data = response.arrayBuffer();
     }
     const data = await this.data;
+    if (this.tracks.length === 0) {
+      this.tracks = this.fmp4Parser.parse(data);
+      const codec = `video/mp4; codecs="${this.tracks.map(track => track.codec).join(', ')}"`;
+      if (!bufferProxy.initialized) {
+        if (MediaSource.isTypeSupported(codec)) {
+          bufferProxy.init(codec);
+        } else {
+          throw new Error(`Unsupported codec: ${codec}`);
+        }
+      }
+    }
     if (this.state !== 'loading') {
       // 取消appendBuffer
       return;
     }
     this.state = 'buffering';
-    await bufferProxy.appendBuffer(data);
+    await bufferProxy.appendBuffer({ data, tracks: this.tracks });
     this.state = 'buffered';
+  }
+  async load2(softDecoder: SoftDecoder) {
+    const videoTracks = this.tracks.filter(track => track.type === 'video');
+    const audioTracks = this.tracks.filter(track => track.type === 'audio');
+    for (const track of videoTracks) {
+      if (softDecoder.videoDecoder.state !== 'configured') {
+        await softDecoder.videoDecoder.initialize();
+        await softDecoder.videoDecoder.configure({
+          codec: 'hevc',
+          description: track.codecInfo?.extraData,
+        });
+        softDecoder.canvas.width = track.width ?? 1920;
+        softDecoder.canvas.height = track.height ?? 1080;
+      }
+      track.samples.forEach(sample => {
+        softDecoder.decodeVideo({
+          data: sample.data,
+          timestamp: softDecoder.videoTimestamp,
+          type: sample.keyFrame ? 'key' : 'delta'
+        });
+        softDecoder.videoTimestamp += sample.duration ?? 0;
+      });
+    }
+    for (const track of audioTracks) {
+      if (softDecoder.audioDecoder.state !== 'configured') {
+        await softDecoder.audioDecoder.initialize();
+        await softDecoder.audioDecoder.configure({
+          codec: 'aac',
+          description: track.codecInfo?.extraData,
+          numberOfChannels: track.channelCount ?? 2,
+          sampleRate: track.sampleRate ?? 44100,
+        });
+      }
+      track.samples.forEach(sample => {
+        softDecoder.decodeAudio({
+          data: sample.data,
+          timestamp: softDecoder.audioTimestamp,
+          type: 'key'
+        });
+        softDecoder.audioTimestamp += sample.duration ?? 0;
+      });
+    }
   }
   unBuffer() {
     if (this.state === 'init') return;
@@ -56,7 +110,15 @@ class SourceBufferProxy {
   removeQueue: { start: number, end: number, resolve: () => void, reject: (e: Event) => void; }[] = [];
   currentWaiting?: () => void;
   currentError: (e: Event) => void = () => { };
-  constructor(public sourceBuffer: SourceBuffer) {
+  private sourceBuffer!: SourceBuffer;
+  constructor(private mediaSource: MediaSource) {
+  }
+  get initialized() {
+    return !!this.sourceBuffer;
+  }
+  init(codec: string) {
+    this.sourceBuffer = this.mediaSource.addSourceBuffer(codec);
+    this.sourceBuffer.mode = 'sequence';
     this.sourceBuffer.addEventListener('updateend', () => {
       this.currentWaiting?.();
       if (this.removeQueue.length > 0) {
@@ -77,16 +139,16 @@ class SourceBufferProxy {
       this.currentError(e);
     });
   }
-  appendBuffer(data: ArrayBuffer) {
+  appendBuffer(segment: { data: ArrayBuffer, tracks: Track[]; }) {
     if (!this.currentWaiting) {
-      this.sourceBuffer.appendBuffer(data);
+      this.sourceBuffer.appendBuffer(segment.data);
       return new Promise<void>((resolve, reject) => {
         this.currentWaiting = resolve;
         this.currentError = reject;
       });
     } else {
       return new Promise<void>((resolve, reject) => {
-        this.queue.push({ data, resolve, reject });
+        this.queue.push({ data: segment.data, resolve, reject });
       });
     }
   }
@@ -117,7 +179,6 @@ function createPlaylistFromM3U8(m3u8Content: string, baseUrl: string): PlaylistI
   let segmentIndex = 0;
   let segmentDuration = 0;
   let segmentTime: Date | null = null;
-  let segmentCodec: string | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -128,8 +189,6 @@ function createPlaylistFromM3U8(m3u8Content: string, baseUrl: string): PlaylistI
       if (match) {
         segmentDuration = parseFloat(match[1]);
         const timeString = match[2] ? match[2].trim() : "";
-        const codecString = match[3] ? match[3].trim() : "";
-
         // 解析物理时间
         try {
           if (timeString) {
@@ -140,9 +199,6 @@ function createPlaylistFromM3U8(m3u8Content: string, baseUrl: string): PlaylistI
         } catch (e) {
           segmentTime = null;
         }
-
-        // 解析编解码器信息
-        segmentCodec = codecString || null;
       }
     }
     // 处理片段URL行
@@ -154,7 +210,6 @@ function createPlaylistFromM3U8(m3u8Content: string, baseUrl: string): PlaylistI
         url: url.toString(),
         duration: segmentDuration,
         physicalTime: segmentTime,
-        codec: segmentCodec,
       });
       segment.virtualStartTime = virtualStartTime;
       segment.virtualEndTime = virtualEndTime;
@@ -163,7 +218,6 @@ function createPlaylistFromM3U8(m3u8Content: string, baseUrl: string): PlaylistI
       totalDuration += segmentDuration;
       segmentIndex++;
       segmentTime = null;
-      segmentCodec = null;
     }
   }
 
@@ -182,6 +236,7 @@ class Timeline {
   urlSrouce?: string;
   debug: boolean = false;
   singleFmp4: boolean = false;
+  softDecoder?: SoftDecoder;
   updatePosition = () => {
     this.position = this.video.currentTime + this.offset;
     this.checkBuffer();
@@ -214,10 +269,8 @@ class Timeline {
         this.urlSrouce = URL.createObjectURL(mediaSource);
         this.video.src = this.urlSrouce;
         this.currentSegment = this.segments[0];
+        this.sourceBufferProxy = new SourceBufferProxy(mediaSource);
         mediaSource.addEventListener('sourceopen', () => {
-          const sourceBuffer = mediaSource.addSourceBuffer(`video/mp4; codecs="${codec || this.segments[0].codec}"`);
-          sourceBuffer.mode = 'sequence';
-          this.sourceBufferProxy = new SourceBufferProxy(sourceBuffer);
           for (let i = 0; i < 2 && i < this.segments.length; i++) {
             this.appendSegment(this.segments[i]);
           }
@@ -293,9 +346,18 @@ class Timeline {
   }
 
   appendSegment(segment: MediaSegment) {
-    segment.load(this.sourceBufferProxy!).then(() => {
-      this.printSegments();
-    });
+    if (this.softDecoder) {
+      segment.load2(this.softDecoder);
+    } else {
+      segment.load(this.sourceBufferProxy!).then(() => {
+        this.printSegments();
+      }).catch(e => {
+        this.softDecoder = new SoftDecoder('');
+        this.video.srcObject = this.softDecoder.canvas.captureStream();
+        this.softDecoder.start();
+        segment.load2(this.softDecoder);
+      });
+    }
   }
 
   get bufferedLength() {
