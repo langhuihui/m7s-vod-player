@@ -13,7 +13,10 @@ interface MediaSegmentInfo {
   duration: number;
   physicalTime: Date | null;
 }
-
+interface BufferRange {
+  start: number;
+  end: number;
+}
 class MediaSegment {
   url: string;             // 片段URL
   duration: number;        // 片段实际持续时间
@@ -24,6 +27,8 @@ class MediaSegment {
   state: 'init' | 'loading' | 'loaded' | 'buffering' | 'buffered' = 'init';
   fmp4Parser = new Fmp4Parser(false);
   tracks: Track[] = [];
+  softDecoder?: SoftDecoder;
+
   constructor(public index: number, info: MediaSegmentInfo) {
     this.url = info.url;
     this.duration = info.duration;
@@ -58,6 +63,17 @@ class MediaSegment {
     this.state = 'buffered';
   }
   async load2(softDecoder: SoftDecoder) {
+    this.softDecoder = softDecoder;
+    if (this.state === 'init') {
+      this.state = 'loading';
+      if (!this.data) {
+        const response = await fetch(this.url);
+        this.data = response.arrayBuffer();
+      }
+      const data = await this.data;
+      this.tracks = this.fmp4Parser.parse(data);
+      this.state = 'buffering';
+    }
     const videoTracks = this.tracks.filter(track => track.type === 'video');
     const audioTracks = this.tracks.filter(track => track.type === 'audio');
     for (const track of videoTracks) {
@@ -70,13 +86,14 @@ class MediaSegment {
         softDecoder.canvas.width = track.width ?? 1920;
         softDecoder.canvas.height = track.height ?? 1080;
       }
+      let timestamp = this.virtualStartTime;
       track.samples.forEach(sample => {
         softDecoder.decodeVideo({
           data: sample.data,
-          timestamp: softDecoder.videoTimestamp,
+          timestamp: timestamp,
           type: sample.keyFrame ? 'key' : 'delta'
         });
-        softDecoder.videoTimestamp += sample.duration ?? 0;
+        timestamp += sample.duration ?? 0;
       });
     }
     for (const track of audioTracks) {
@@ -89,19 +106,30 @@ class MediaSegment {
           sampleRate: track.sampleRate ?? 44100,
         });
       }
+      let timestamp = this.virtualStartTime;
       track.samples.forEach(sample => {
         softDecoder.decodeAudio({
           data: sample.data,
-          timestamp: softDecoder.audioTimestamp,
+          timestamp: timestamp,
           type: 'key'
         });
-        softDecoder.audioTimestamp += sample.duration ?? 0;
+        timestamp += sample.duration ?? 0;
       });
     }
+    this.state = 'buffered';
   }
   unBuffer() {
     if (this.state === 'init') return;
     this.state = 'loaded';
+    if (this.softDecoder) {
+      // Remove all frames within this segment's time range from decoder buffers
+      this.softDecoder.videoBuffer = this.softDecoder.videoBuffer.filter(x =>
+        x.timestamp < this.virtualStartTime || x.timestamp >= this.virtualEndTime
+      );
+      this.softDecoder.audioBuffer = this.softDecoder.audioBuffer.filter(x =>
+        x.timestamp < this.virtualStartTime || x.timestamp >= this.virtualEndTime
+      );
+    }
   }
 }
 
@@ -231,6 +259,7 @@ class Timeline {
   sourceBufferProxy?: SourceBufferProxy;
   position: number = 0;
   offset: number = 0;
+  private _offset: number = 0;
   windowSize: number = 2;
   currentSegment?: MediaSegment;
   urlSrouce?: string;
@@ -238,25 +267,25 @@ class Timeline {
   singleFmp4: boolean = false;
   softDecoder?: SoftDecoder;
   updatePosition = () => {
-    this.position = this.video.currentTime + this.offset;
+    this.position = this.currentTime + this.offset;
     this.checkBuffer();
   };
   onWaiting = () => {
     const buffered = this.video.buffered;
     for (let i = 0; i < buffered.length; i++) {
       const start = buffered.start(i);
-      if (this.video.currentTime >= start) {
+      if (this.currentTime >= start) {
         continue;
       }
-      this.video.currentTime = start;
+      this.currentTime = start;
       this.video.play();
     }
   };
   constructor(public video: HTMLVideoElement, opt: { debug: boolean; } = { debug: false }) {
     this.debug = opt.debug;
   }
-  async load(url: string, codec?: string) {
-    console.log('load', url, codec);
+  async load(url: string) {
+    console.log('load', url);
     const mediaSource = this.mediaSource;
     const urlObj = new URL(url);
     switch (urlObj.pathname.split('.').pop()) {
@@ -270,9 +299,9 @@ class Timeline {
         this.video.src = this.urlSrouce;
         this.currentSegment = this.segments[0];
         this.sourceBufferProxy = new SourceBufferProxy(mediaSource);
-        mediaSource.addEventListener('sourceopen', () => {
+        mediaSource.addEventListener('sourceopen', async () => {
           for (let i = 0; i < 2 && i < this.segments.length; i++) {
-            this.appendSegment(this.segments[i]);
+            await this.appendSegment(this.segments[i]);
           }
         });
         mediaSource.addEventListener('sourceended', () => {
@@ -282,18 +311,18 @@ class Timeline {
         this.video.addEventListener('waiting', this.onWaiting);
         break;
       case 'fmp4':
-        this.singleFmp4 = true;
-        this.urlSrouce = URL.createObjectURL(mediaSource);
-        this.video.src = this.urlSrouce;
-        const fmp4Buffer = fetch(url).then(res => res.arrayBuffer());
-        mediaSource.addEventListener('sourceopen', async () => {
-          const sourceBuffer = mediaSource.addSourceBuffer(`video/mp4; codecs="${codec}"`);
-          sourceBuffer.mode = 'sequence';
-          sourceBuffer.appendBuffer(await fmp4Buffer);
-          sourceBuffer.addEventListener('updateend', () => {
-            this.mediaSource.endOfStream();
-          });
-        });
+        // this.singleFmp4 = true;
+        // this.urlSrouce = URL.createObjectURL(mediaSource);
+        // this.video.src = this.urlSrouce;
+        // const fmp4Buffer = fetch(url).then(res => res.arrayBuffer());
+        // mediaSource.addEventListener('sourceopen', async () => {
+        //   const sourceBuffer = mediaSource.addSourceBuffer(`video/mp4; codecs="${codec}"`);
+        //   sourceBuffer.mode = 'sequence';
+        //   sourceBuffer.appendBuffer(await fmp4Buffer);
+        //   sourceBuffer.addEventListener('updateend', () => {
+        //     this.mediaSource.endOfStream();
+        //   });
+        // });
         break;
     }
   }
@@ -307,6 +336,9 @@ class Timeline {
     }
     if (this.urlSrouce) {
       URL.revokeObjectURL(this.urlSrouce);
+    }
+    if (this.softDecoder) {
+      this.softDecoder.dispose();
     }
   }
   printSegments() {
@@ -345,17 +377,35 @@ class Timeline {
     }
   }
 
-  appendSegment(segment: MediaSegment) {
+  async appendSegment(segment: MediaSegment): Promise<void> {
     if (this.softDecoder) {
-      segment.load2(this.softDecoder);
+      await segment.load2(this.softDecoder);
+      this.printSegments();
     } else {
-      segment.load(this.sourceBufferProxy!).then(() => {
+      return segment.load(this.sourceBufferProxy!).then(() => {
         this.printSegments();
       }).catch(e => {
-        this.softDecoder = new SoftDecoder('');
+        this.softDecoder = new SoftDecoder('', { yuvMode: true });
         this.video.srcObject = this.softDecoder.canvas.captureStream();
-        this.softDecoder.start();
-        segment.load2(this.softDecoder);
+
+        // 监听视频播放状态
+        this.video.addEventListener('play', () => {
+          this.softDecoder?.start();
+        });
+        this.video.addEventListener('pause', () => {
+          this.softDecoder?.stop();
+        });
+        this.video.addEventListener('ended', () => {
+          this.softDecoder?.stop();
+        });
+        this.video.addEventListener('waiting', () => {
+          this.softDecoder?.stop();
+        });
+        this.video.addEventListener('canplay', () => {
+          this.video.play();
+        });
+
+        return this.appendSegment(segment);
       });
     }
   }
@@ -378,16 +428,55 @@ class Timeline {
     const nextSegment = this.segments[this.currentSegment.index + 1];
     if (nextSegment) this.appendSegment(nextSegment);
   }
-
+  set currentTime(time: number) {
+    if (this.softDecoder) {
+      this._offset = time - this.video.currentTime;
+    } else this.video.currentTime = time;
+  }
+  get currentTime(): number {
+    if (this.softDecoder) return this.video.currentTime + this._offset;
+    else return this.video.currentTime;
+  }
   async seek(time: number) {
     if (!this.currentSegment) return;
     const targetSegment = this.segments.find(segment => segment.virtualEndTime > time);
     if (!targetSegment) {
       return;
     }
+    const offsetInSegment = time - targetSegment.virtualStartTime;
+    const bufferRemain = this.currentSegment.virtualEndTime - this.position;
+    const nextSegment = this.segments[targetSegment.index + 1];
+
+    if (this.softDecoder) {
+      // Clear all segment buffers regardless of seeking to different segment or within same segment
+      this.segments.forEach(segment => {
+        segment.unBuffer();
+      });
+
+      // Reset softDecoder internal buffers completely
+      this.softDecoder.videoBuffer = [];
+      this.softDecoder.audioBuffer = [];
+
+      // Load target segment
+      await targetSegment.load2(this.softDecoder);
+      if (nextSegment) await this.appendSegment(nextSegment);
+
+      // Update time tracking
+      this.offset = time - this.currentTime;
+      this.position = time;
+      this.currentSegment = targetSegment;
+
+      // Use the absolute timestamp for seeking instead of relative
+      this.softDecoder.seek(time);
+
+      this.checkBuffer();
+      return this.video.play();
+    }
+
+    // Regular MSE-based seeking logic (unchanged)
     if (targetSegment.state === 'buffered') {
       this.position = time;
-      this.video.currentTime = time - this.offset;
+      this.currentTime = time - this.offset;
       if (targetSegment.index === this.currentSegment.index + 1) {
         this.bufferNext();
       }
@@ -396,17 +485,13 @@ class Timeline {
     this.segments.forEach(segment => {
       segment.unBuffer();
     });
-    const nextSegment = this.segments[targetSegment.index + 1];
     const bufferStart = this.video.buffered.start(0);
     const bufferEnd = this.video.buffered.end(this.video.buffered.length - 1);
-    const offsetInSegment = time - targetSegment.virtualStartTime;
-    const bufferRemain = this.currentSegment.virtualEndTime - this.position;
     await targetSegment.load(this.sourceBufferProxy!);
-    const targetNextSegment = this.segments[targetSegment.index + 1];
-    if (targetNextSegment) this.appendSegment(targetNextSegment);
+    if (nextSegment) await this.appendSegment(nextSegment);
     this.printSegments();
-    this.video.currentTime += offsetInSegment + bufferRemain + nextSegment.duration;
-    this.offset = time - this.video.currentTime;
+    this.currentTime += offsetInSegment + bufferRemain + nextSegment.duration;
+    this.offset = time - this.currentTime;
     this.position = time;
     await this.sourceBufferProxy!.remove(bufferStart, bufferEnd);
     this.currentSegment = targetSegment;

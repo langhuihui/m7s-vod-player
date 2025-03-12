@@ -5,7 +5,6 @@ import { Timeline } from "../timeline";
 // No longer need the timeline prop as we'll create it internally
 const props = defineProps<{
   src?: string;
-  codec?: string;
 }>();
 
 const video = ref<HTMLVideoElement>();
@@ -313,7 +312,7 @@ watch(
       const tl = new Timeline(video.value);
       timeline.value = tl;
       currentPosition.value = 0;
-      tl.load(src, props.codec).then(() => {
+      tl.load(src).then(() => {
         singleFmp4.value = tl.singleFmp4;
       });
     }
