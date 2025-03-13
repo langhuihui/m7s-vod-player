@@ -293,6 +293,7 @@ class Timeline {
         this.singleFmp4 = false;
         const m3u8Content = await fetch(url).then(res => res.text());
         const playlist = createPlaylistFromM3U8(m3u8Content, urlObj.origin + urlObj.pathname.split("/").slice(0, -1).join("/"));
+        console.log('playlist', playlist);
         this.segments = playlist.segments;
         this.totalDuration = playlist.totalDuration;
         this.urlSrouce = URL.createObjectURL(mediaSource);
