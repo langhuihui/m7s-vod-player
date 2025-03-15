@@ -80,7 +80,7 @@ class MediaSegment {
       if (softDecoder.videoDecoder.state !== 'configured') {
         await softDecoder.videoDecoder.initialize();
         await softDecoder.videoDecoder.configure({
-          codec: 'hevc',
+          codec: track.codec.startsWith('avc1') ? 'avc' : 'hevc',
           description: track.codecInfo?.extraData,
         });
         softDecoder.canvas.width = track.width ?? 1920;
@@ -145,6 +145,7 @@ class SourceBufferProxy {
     return !!this.sourceBuffer;
   }
   init(codec: string) {
+    console.log('init', codec);
     this.sourceBuffer = this.mediaSource.addSourceBuffer(codec);
     this.sourceBuffer.mode = 'sequence';
     this.sourceBuffer.addEventListener('updateend', () => {
@@ -386,6 +387,7 @@ class Timeline {
       return segment.load(this.sourceBufferProxy!).then(() => {
         this.printSegments();
       }).catch(e => {
+        console.error('appendSegment', e);
         this.softDecoder = new SoftDecoder('', { yuvMode: true });
         this.video.srcObject = this.softDecoder.canvas.captureStream();
 
