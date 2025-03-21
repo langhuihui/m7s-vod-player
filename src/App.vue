@@ -5,7 +5,7 @@ import VideoPlayer from "./components/VideoPlayer.vue";
 const videoPlayer = ref<{ value: HTMLVideoElement }>();
 const url = ref(
   // "http://localhost:8080/hls/vod/fmp4.m3u8?start=1741944171&streamPath=live/1581F6Q8X24BU00G01HK"
-  // "http://localhost:8080/hls/vod/fmp4.m3u8?start=1741674505&streamPath=live/265"
+  "http://localhost:8080/hls/vod/fmp4.m3u8?start=1741674505&streamPath=live/265"
   // ""
 );
 const onTimeupdate = (time: number) => {

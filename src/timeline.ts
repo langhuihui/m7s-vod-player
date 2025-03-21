@@ -88,6 +88,7 @@ class MediaSegment {
       }
       let timestamp = this.virtualStartTime;
       track.samples.forEach(sample => {
+        console.log('decode video', sample.keyFrame, timestamp);
         softDecoder.decodeVideo({
           data: sample.data,
           timestamp: timestamp,
@@ -433,11 +434,11 @@ class Timeline {
   }
   set currentTime(time: number) {
     if (this.softDecoder) {
-      this._offset = time - this.video.currentTime;
+      this._offset = time - this.softDecoder.getCurrentTime();
     } else this.video.currentTime = time;
   }
   get currentTime(): number {
-    if (this.softDecoder) return this.video.currentTime + this._offset;
+    if (this.softDecoder) return this.softDecoder.getCurrentTime() + this._offset;
     else return this.video.currentTime;
   }
   async seek(time: number) {
