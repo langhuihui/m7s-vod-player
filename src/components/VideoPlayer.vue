@@ -174,6 +174,12 @@ function changePlaybackRate(rate: number) {
 
   playbackRate.value = rate;
   video.value.playbackRate = rate;
+
+  // Update SoftDecoder's playback speed if it exists
+  if (timeline.value?.softDecoder) {
+    timeline.value.softDecoder.setPlaybackSpeed(rate);
+  }
+
   showPlaybackRateMenu.value = false;
 }
 
