@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Player Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+
+    .container {
+      margin-top: 30px;
+    }
+
+    .controls {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #f5f5f5;
+      border-radius: 4px;
+    }
+
+    button {
+      padding: 8px 12px;
+      margin-right: 10px;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #3367d6;
+    }
+
+    .info {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #e0f7fa;
+      border-radius: 4px;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "lit": "./node_modules/lit/index.js",
+        "lit/decorators.js": "./node_modules/lit/decorators.js"
+      }
+    }
+  </script>
+  <script type="module" src="components/components/video-player.js"></script>
+</head>
+
+<body>
+  <h1>Video Player Test</h1>
+
+  <div class="container">
+    <!-- The video player component will be placed here -->
+    <video-player id="player"></video-player>
+
+    <div class="controls">
+      <button id="loadBtn">Load Video</button>
+      <button id="seekBtn">Seek to 30s</button>
+    </div>
+
+    <div class="info">
+      <p>Current Time: <span id="currentTime">00:00</span></p>
+      <p>Duration: <span id="duration">00:00</span></p>
+      <p>Segments: <span id="segments">0</span></p>
+    </div>
+  </div>
+
+  <script>
+    // Wait for the component to be defined
+    window.addEventListener('DOMContentLoaded', () => {
+      // Get references to DOM elements
+      const player = document.getElementById('player');
+      const loadBtn = document.getElementById('loadBtn');
+      const seekBtn = document.getElementById('seekBtn');
+      const currentTimeDisplay = document.getElementById('currentTime');
+      const durationDisplay = document.getElementById('duration');
+      const segmentsDisplay = document.getElementById('segments');
+
+      // Function to format time for display
+      function formatTime(seconds) {
+        const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+        const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+        return `${mins}:${secs}`;
+      }
+
+      // Set up event listeners once the component is ready
+      customElements.whenDefined('video-player').then(() => {
+        console.log('Video player component is ready');
+
+        // Add event listeners
+        player.addEventListener('timeupdate', (e) => {
+          currentTimeDisplay.textContent = formatTime(e.detail);
+        });
+
+        player.addEventListener('segments', (e) => {
+          segmentsDisplay.textContent = e.detail.length;
+        });
+
+        // Load video button click handler
+        loadBtn.addEventListener('click', () => {
+          // Use a sample video URL (replace with your actual video URL)
+          const videoUrl = 'http://localhost:8080/hls/vod/fmp4.m3u8?start=1740655216&streamPath=live/test';
+
+          // Set the source and enable debug mode
+          player.src = videoUrl;
+          player.debug = true;
+
+          // Update duration display after video is loaded
+          setTimeout(() => {
+            durationDisplay.textContent = formatTime(player.totalDuration || 0);
+          }, 500);
+        });
+
+        // Seek button click handler
+        seekBtn.addEventListener('click', () => {
+          player.seek(30);
+        });
+      });
+    });
+  </script>
+</body>
+
+</html>

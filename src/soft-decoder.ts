@@ -155,7 +155,15 @@ export class SoftDecoder {
     if (speed <= 0) {
       throw new Error('Playback speed must be greater than 0');
     }
+
+    // Calculate the current playback position before changing speed
+    const currentPosition = this.getCurrentTime();
+
+    // Update the start time to maintain the current position with new speed
+    this.startTime = performance.now() - (currentPosition / speed);
+
     this.playbackSpeed = speed;
+    console.log('playbackSpeed', this.playbackSpeed);
   }
 
   seek(timestamp: number) {
@@ -240,10 +248,11 @@ export class SoftDecoder {
     }
   }
 
-  private getCurrentTime(): number {
+  getCurrentTime(): number {
     if (this.pausedAt !== null) {
       return this.pausedAt;
     }
+    // Calculate current time based on the adjusted start time and playback speed
     return (performance.now() - this.startTime) * this.playbackSpeed;
   }
 
@@ -259,7 +268,6 @@ export class SoftDecoder {
 
   private processNextFrame = () => {
     if (!this.isPlaying) return;
-
     const currentTime = this.getCurrentTime();
 
     // Handle seeking
@@ -276,9 +284,29 @@ export class SoftDecoder {
 
     // Process video buffer
     if (this.videoBuffer.length > 0 && this.videoBuffer[0].timestamp <= currentTime) {
+      // console.log('process video buffer', this.videoBuffer[0].timestamp, currentTime);
       const frame = this.videoBuffer.shift();
       if (frame) {
         this.videoDecoder.decode(frame);
+      }
+    }
+
+    // Skip current GOP if all frames are behind current time
+    if (this.videoBuffer.length > 0) {
+      // Find the next keyframe index
+      const nextKeyFrameIndex = this.videoBuffer.findIndex((frame, index) =>
+        index > 0 && frame.type === 'key'
+      );
+      // console.log('nextKeyFrameIndex', this.videoBuffer.length, nextKeyFrameIndex);
+      // If we found a next keyframe, check if all frames in current GOP are behind
+      if (nextKeyFrameIndex !== -1) {
+        const currentGOPFrames = this.videoBuffer.slice(0, nextKeyFrameIndex);
+        const allFramesBehind = currentGOPFrames.every(frame => frame.timestamp <= currentTime);
+
+        if (allFramesBehind) {
+          // Skip all frames until next keyframe
+          this.videoBuffer.splice(0, nextKeyFrameIndex);
+        }
       }
     }
 
