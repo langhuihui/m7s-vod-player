@@ -33,7 +33,9 @@ export class SoftDecoder {
 
   constructor(wasmPath: string, options?: { yuvMode?: boolean; }) {
     this.canvas = document.createElement('canvas');
-
+    this.canvas.style.width = '160px';
+    this.canvas.style.height = '120px';
+    document.body.appendChild(this.canvas);
     if (options?.yuvMode || false) {
       this.yuvRenderer = new YuvRenderer(this.canvas);
     } else {
@@ -49,6 +51,7 @@ export class SoftDecoder {
     this.audioDecoder = new AudioDecoderSoft();
 
     this.videoDecoder.on(VideoDecoderEvent.VideoFrame, (videoFrame: VideoFrame) => {
+      console.log('videoFrame', videoFrame);
       if (this.yuvRenderer) {
         const yuvData = videoFrame as unknown as [y: Uint8Array, u: Uint8Array, v: Uint8Array];
         this.yuvRenderer.render(yuvData[0], yuvData[1], yuvData[2], this.canvas.width, this.canvas.width / 2);
@@ -170,7 +173,7 @@ export class SoftDecoder {
     if (!this.isPlaying) return;
 
     // Find the nearest keyframe before the requested timestamp
-    const keyFrameTimestamp = this.findNearestKeyFrame(timestamp);
+    const keyFrameTimestamp = this.findNearestKeyFrame(timestamp * 1000);
 
     // Clear existing buffers
     this.videoBuffer = this.videoBuffer.filter(item => item.timestamp >= keyFrameTimestamp);
@@ -186,8 +189,8 @@ export class SoftDecoder {
     }
 
     // Update time tracking
-    this.timeOffset = timestamp;
-    this.startTime = performance.now() - timestamp;
+    this.timeOffset = timestamp * 1000;
+    this.startTime = performance.now() - timestamp * 1000;
     this.seekTime = keyFrameTimestamp;
   }
 
@@ -212,9 +215,6 @@ export class SoftDecoder {
     } else {
       this.startTime = performance.now() - this.timeOffset;
     }
-
-    // 先处理一帧以启动视频
-    this.processInitialFrame();
 
     // 启动帧处理循环
     this.processNextFrame();
@@ -253,13 +253,13 @@ export class SoftDecoder {
       return this.pausedAt;
     }
     // Calculate current time based on the adjusted start time and playback speed
-    return (performance.now() - this.startTime) * this.playbackSpeed;
+    return (performance.now() - this.startTime + this.timeOffset) * this.playbackSpeed;
   }
 
-  private processInitialFrame() {
+  processInitialFrame() {
     // 处理视频缓冲区中的第一帧
     if (this.videoBuffer.length > 0) {
-      const frame = this.videoBuffer[0];
+      const frame = this.videoBuffer.shift();
       if (frame) {
         this.videoDecoder.decode(frame);
       }
@@ -268,7 +268,11 @@ export class SoftDecoder {
 
   private processNextFrame = () => {
     if (!this.isPlaying) return;
+
     const currentTime = this.getCurrentTime();
+    if (this.videoBuffer.length) {
+      console.log(this.videoBuffer.length, this.videoBuffer[this.videoBuffer.length - 1].timestamp, currentTime);
+    }
 
     // Handle seeking
     if (this.seekTime !== null) {
@@ -332,14 +336,12 @@ export class SoftDecoder {
       console.warn('Video buffer full, dropping frame');
       return;
     }
-
     const isKeyFrame = data.type === 'key';
     if (isKeyFrame) {
       this.keyFrameList.push(data.timestamp!);
     }
 
     this.videoBuffer.push(data);
-    if (!this.isPlaying) this.start();
   }
 
   decodeAudio(data: EncodedAudioChunkInit) {
@@ -348,12 +350,6 @@ export class SoftDecoder {
       return;
     }
     this.audioBuffer.push(data);
-    if (!this.isPlaying) this.start();
-  }
-
-  // Get current playback position
-  getCurrentPosition(): number {
-    return this.getCurrentTime();
   }
 
   // Dispose of resources

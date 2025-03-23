@@ -86,12 +86,11 @@ class MediaSegment {
         softDecoder.canvas.width = track.width ?? 1920;
         softDecoder.canvas.height = track.height ?? 1080;
       }
-      let timestamp = this.virtualStartTime;
+      let timestamp = this.virtualStartTime * 1000;
       track.samples.forEach(sample => {
-        console.log('decode video', sample.keyFrame, timestamp);
         softDecoder.decodeVideo({
           data: sample.data,
-          timestamp: timestamp,
+          timestamp,
           type: sample.keyFrame ? 'key' : 'delta'
         });
         timestamp += sample.duration ?? 0;
@@ -107,7 +106,7 @@ class MediaSegment {
           sampleRate: track.sampleRate ?? 44100,
         });
       }
-      let timestamp = this.virtualStartTime;
+      let timestamp = this.virtualStartTime * 1000;
       track.samples.forEach(sample => {
         softDecoder.decodeAudio({
           data: sample.data,
@@ -125,10 +124,10 @@ class MediaSegment {
     if (this.softDecoder) {
       // Remove all frames within this segment's time range from decoder buffers
       this.softDecoder.videoBuffer = this.softDecoder.videoBuffer.filter(x =>
-        x.timestamp < this.virtualStartTime || x.timestamp >= this.virtualEndTime
+        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
       );
       this.softDecoder.audioBuffer = this.softDecoder.audioBuffer.filter(x =>
-        x.timestamp < this.virtualStartTime || x.timestamp >= this.virtualEndTime
+        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
       );
     }
   }
@@ -391,7 +390,6 @@ class Timeline {
         console.error('appendSegment', e);
         this.softDecoder = new SoftDecoder('', { yuvMode: true });
         this.video.srcObject = this.softDecoder.canvas.captureStream();
-
         // 监听视频播放状态
         this.video.addEventListener('play', () => {
           this.softDecoder?.start();
@@ -402,14 +400,9 @@ class Timeline {
         this.video.addEventListener('ended', () => {
           this.softDecoder?.stop();
         });
-        this.video.addEventListener('waiting', () => {
-          this.softDecoder?.stop();
+        return this.appendSegment(segment).then(() => {
+          this.softDecoder?.processInitialFrame();
         });
-        this.video.addEventListener('canplay', () => {
-          this.video.play();
-        });
-
-        return this.appendSegment(segment);
       });
     }
   }
@@ -434,11 +427,11 @@ class Timeline {
   }
   set currentTime(time: number) {
     if (this.softDecoder) {
-      this._offset = time - this.softDecoder.getCurrentTime();
+      this._offset = time - this.softDecoder.getCurrentTime() / 1000;
     } else this.video.currentTime = time;
   }
   get currentTime(): number {
-    if (this.softDecoder) return this.softDecoder.getCurrentTime() + this._offset;
+    if (this.softDecoder) return this.softDecoder.getCurrentTime() / 1000 + this._offset;
     else return this.video.currentTime;
   }
   async seek(time: number) {
@@ -464,14 +457,13 @@ class Timeline {
       // Load target segment
       await targetSegment.load2(this.softDecoder);
       if (nextSegment) await this.appendSegment(nextSegment);
+      this.softDecoder.seek(time);
 
       // Update time tracking
       this.offset = time - this.currentTime;
       this.position = time;
       this.currentSegment = targetSegment;
 
-      // Use the absolute timestamp for seeking instead of relative
-      this.softDecoder.seek(time);
 
       this.checkBuffer();
       return this.video.play();
