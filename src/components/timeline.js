@@ -50,10 +50,10 @@ class v {
     const t = this.tracks.filter((i) => i.type === "video"), s = this.tracks.filter((i) => i.type === "audio");
     for (const i of t) {
       e.videoDecoder.state !== "configured" && (await e.videoDecoder.initialize(), await e.videoDecoder.configure({
-        codec: "hevc",
+        codec: i.codec.startsWith("avc1") ? "avc" : "hevc",
         description: i.codecInfo?.extraData
       }), e.canvas.width = i.width ?? 1920, e.canvas.height = i.height ?? 1080);
-      let r = this.virtualStartTime;
+      let r = this.virtualStartTime * 1e3;
       i.samples.forEach((n) => {
         e.decodeVideo({
           data: n.data,
@@ -69,7 +69,7 @@ class v {
         numberOfChannels: i.channelCount ?? 2,
         sampleRate: i.sampleRate ?? 44100
       }));
-      let r = this.virtualStartTime;
+      let r = this.virtualStartTime * 1e3;
       i.samples.forEach((n) => {
         e.decodeAudio({
           data: n.data,
@@ -82,9 +82,9 @@ class v {
   }
   unBuffer() {
     this.state !== "init" && (this.state = "loaded", this.softDecoder && (this.softDecoder.videoBuffer = this.softDecoder.videoBuffer.filter(
-      (e) => e.timestamp < this.virtualStartTime || e.timestamp >= this.virtualEndTime
+      (e) => e.timestamp < this.virtualStartTime * 1e3 || e.timestamp >= this.virtualEndTime * 1e3
     ), this.softDecoder.audioBuffer = this.softDecoder.audioBuffer.filter(
-      (e) => e.timestamp < this.virtualStartTime || e.timestamp >= this.virtualEndTime
+      (e) => e.timestamp < this.virtualStartTime * 1e3 || e.timestamp >= this.virtualEndTime * 1e3
     )));
   }
 }
@@ -103,7 +103,7 @@ class S {
     return !!this.sourceBuffer;
   }
   init(e) {
-    this.sourceBuffer = this.mediaSource.addSourceBuffer(e), this.sourceBuffer.mode = "sequence", this.sourceBuffer.addEventListener("updateend", () => {
+    console.log("init", e), this.sourceBuffer = this.mediaSource.addSourceBuffer(e), this.sourceBuffer.mode = "sequence", this.sourceBuffer.addEventListener("updateend", () => {
       if (this.currentWaiting?.(), this.removeQueue.length > 0) {
         const { start: t, end: s, resolve: i, reject: r } = this.removeQueue.shift();
         this.sourceBuffer.remove(t, s), this.currentWaiting = i, this.currentError = r;
@@ -134,27 +134,27 @@ class S {
 function T(d, e) {
   const t = d.split(`
 `), s = [];
-  let i = 0, r = 0, n = 0, o = null;
-  for (let a = 0; a < t.length; a++) {
-    const h = t[a].trim();
+  let i = 0, r = 0, n = 0, a = null;
+  for (let o = 0; o < t.length; o++) {
+    const h = t[o].trim();
     if (h.startsWith("#EXTINF:")) {
       const u = h.match(p);
       if (u) {
         n = parseFloat(u[1]);
         const c = u[2] ? u[2].trim() : "";
         try {
-          c ? o = new Date(c) : o = null;
+          c ? a = new Date(c) : a = null;
         } catch {
-          o = null;
+          a = null;
         }
       }
     } else if (!h.startsWith("#") && h !== "") {
       const u = new URL(h, e), c = i, l = i + n, f = new v(r, {
         url: u.toString(),
         duration: n,
-        physicalTime: o
+        physicalTime: a
       });
-      f.virtualStartTime = c, f.virtualEndTime = l, s.push(f), i += n, r++, o = null;
+      f.virtualStartTime = c, f.virtualEndTime = l, s.push(f), i += n, r++, a = null;
     }
   }
   return { segments: s, totalDuration: i };
@@ -235,17 +235,15 @@ class E {
     else
       return e.load(this.sourceBufferProxy).then(() => {
         this.printSegments();
-      }).catch((t) => (this.softDecoder = new g("", { yuvMode: !0 }), this.video.srcObject = this.softDecoder.canvas.captureStream(), this.video.addEventListener("play", () => {
+      }).catch((t) => (console.error("appendSegment", t), this.softDecoder = new g("", { yuvMode: !0 }), this.video.srcObject = this.softDecoder.canvas.captureStream(), this.video.addEventListener("play", () => {
         this.softDecoder?.start();
       }), this.video.addEventListener("pause", () => {
         this.softDecoder?.stop();
       }), this.video.addEventListener("ended", () => {
         this.softDecoder?.stop();
-      }), this.video.addEventListener("waiting", () => {
-        this.softDecoder?.stop();
-      }), this.video.addEventListener("canplay", () => {
-        this.video.play();
-      }), this.appendSegment(e)));
+      }), this.appendSegment(e).then(() => {
+        this.softDecoder?.processInitialFrame();
+      })));
   }
   get bufferedLength() {
     if (!this.currentSegment)
@@ -263,29 +261,29 @@ class E {
     e && this.appendSegment(e);
   }
   set currentTime(e) {
-    this.softDecoder ? this._offset = e - this.video.currentTime : this.video.currentTime = e;
+    this.softDecoder ? this._offset = e - this.softDecoder.getCurrentTime() / 1e3 : this.video.currentTime = e;
   }
   get currentTime() {
-    return this.softDecoder ? this.video.currentTime + this._offset : this.video.currentTime;
+    return this.softDecoder ? this.softDecoder.getCurrentTime() / 1e3 + this._offset : this.video.currentTime;
   }
   async seek(e) {
     if (!this.currentSegment)
       return;
-    const t = this.segments.find((a) => a.virtualEndTime > e);
+    const t = this.segments.find((o) => o.virtualEndTime > e);
     if (!t)
       return;
     const s = e - t.virtualStartTime, i = this.currentSegment.virtualEndTime - this.position, r = this.segments[t.index + 1];
     if (this.softDecoder)
-      return this.segments.forEach((a) => {
-        a.unBuffer();
-      }), this.softDecoder.videoBuffer = [], this.softDecoder.audioBuffer = [], await t.load2(this.softDecoder), r && await this.appendSegment(r), this.offset = e - this.currentTime, this.position = e, this.currentSegment = t, this.softDecoder.seek(e), this.checkBuffer(), this.video.play();
+      return this.segments.forEach((o) => {
+        o.unBuffer();
+      }), this.softDecoder.videoBuffer = [], this.softDecoder.audioBuffer = [], await t.load2(this.softDecoder), r && await this.appendSegment(r), this.softDecoder.seek(e), this.offset = e - this.currentTime, this.position = e, this.currentSegment = t, this.checkBuffer(), this.video.play();
     if (t.state === "buffered")
       return this.position = e, this.currentTime = e - this.offset, t.index === this.currentSegment.index + 1 && this.bufferNext(), this.video.play();
-    this.segments.forEach((a) => {
-      a.unBuffer();
+    this.segments.forEach((o) => {
+      o.unBuffer();
     });
-    const n = this.video.buffered.start(0), o = this.video.buffered.end(this.video.buffered.length - 1);
-    return await t.load(this.sourceBufferProxy), r && await this.appendSegment(r), this.printSegments(), this.currentTime += s + i + r.duration, this.offset = e - this.currentTime, this.position = e, await this.sourceBufferProxy.remove(n, o), this.currentSegment = t, this.checkBuffer(), this.video.play();
+    const n = this.video.buffered.start(0), a = this.video.buffered.end(this.video.buffered.length - 1);
+    return await t.load(this.sourceBufferProxy), r && await this.appendSegment(r), this.printSegments(), this.currentTime += s + i + r.duration, this.offset = e - this.currentTime, this.position = e, await this.sourceBufferProxy.remove(n, a), this.currentSegment = t, this.checkBuffer(), this.video.play();
   }
 }
 export {
