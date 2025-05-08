@@ -50,15 +50,7 @@
       border-radius: 4px;
     }
   </style>
-  <script type="importmap">
-    {
-      "imports": {
-        "lit": "./node_modules/lit/index.js",
-        "lit/decorators.js": "./node_modules/lit/decorators.js"
-      }
-    }
-  </script>
-  <script type="module" src="components/components/video-player.js"></script>
+  <script type="module" src="components/video-player.js"></script>
 </head>
 
 <body>
@@ -66,7 +58,7 @@
 
   <div class="container">
     <!-- The video player component will be placed here -->
-    <video-player id="player"></video-player>
+    <m7s-vod-player id="player"></m7s-vod-player>
 
     <div class="controls">
       <button id="loadBtn">Load Video</button>
@@ -99,7 +91,7 @@
       }
 
       // Set up event listeners once the component is ready
-      customElements.whenDefined('video-player').then(() => {
+      customElements.whenDefined('m7s-vod-player').then(() => {
         console.log('Video player component is ready');
 
         // Add event listeners

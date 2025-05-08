@@ -962,11 +962,11 @@ export class VideoPlayer extends LitElement {
 }
 
 // Register the custom element after the class is defined
-customElements.define('video-player', VideoPlayer);
+customElements.define('m7s-vod-player', VideoPlayer);
 
 // Add type declaration for custom element
 declare global {
   interface HTMLElementTagNameMap {
-    'video-player': VideoPlayer;
+    'm7s-vod-player': VideoPlayer;
   }
-} 
+}

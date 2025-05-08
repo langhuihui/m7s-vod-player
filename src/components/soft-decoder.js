@@ -4,7 +4,7 @@ import { VideoDecoderSoft as n } from "./node_modules/.pnpm/jv4-decoder@1.1.3/no
 import { AudioDecoderSoft as h } from "./node_modules/.pnpm/jv4-decoder@1.1.3/node_modules/jv4-decoder/src/audio_decoder_soft.js";
 import { VideoDecoderEvent as u, AudioDecoderEvent as d } from "./node_modules/.pnpm/jv4-decoder@1.1.3/node_modules/jv4-decoder/src/types.js";
 import { YuvRenderer as f } from "./yuv-renderer.js";
-class v {
+class T {
   videoDecoder;
   audioDecoder;
   canvas;
@@ -31,13 +31,13 @@ class v {
   audioGain = null;
   pausedAt = null;
   constructor(i, t) {
-    this.canvas = document.createElement("canvas"), t?.yuvMode ? this.yuvRenderer = new f(this.canvas) : this.gl = this.canvas.getContext("2d"), this.videoDecoder = new n({
+    this.canvas = document.createElement("canvas"), this.canvas.style.width = "160px", this.canvas.style.height = "120px", document.body.appendChild(this.canvas), t?.yuvMode ? this.yuvRenderer = new f(this.canvas) : this.gl = this.canvas.getContext("2d"), this.videoDecoder = new n({
       workerMode: !1,
       yuvMode: !!this.yuvRenderer,
       canvas: this.canvas,
       wasmPath: i
     }), this.audioDecoder = new h(), this.videoDecoder.on(u.VideoFrame, (e) => {
-      if (this.yuvRenderer) {
+      if (console.log("videoFrame", e), this.yuvRenderer) {
         const s = e;
         this.yuvRenderer.render(s[0], s[1], s[2], this.canvas.width, this.canvas.width / 2);
       } else
@@ -53,9 +53,9 @@ class v {
         e.numberOfFrames,
         e.sampleRate
       );
-      for (let a = 0; a < e.numberOfChannels; a++) {
-        const o = new Float32Array(e.numberOfFrames);
-        e.copyTo(o, { planeIndex: a }), s.copyToChannel(o, a);
+      for (let o = 0; o < e.numberOfChannels; o++) {
+        const a = new Float32Array(e.numberOfFrames);
+        e.copyTo(a, { planeIndex: o }), s.copyToChannel(a, o);
       }
       this.audioQueue.push(s), this.audioQueueTimestamps.push(e.timestamp), this.scheduleAudioPlayback();
     });
@@ -68,9 +68,9 @@ class v {
       for (; this.audioQueue.length > 0; ) {
         const i = this.audioQueue[0], t = this.audioQueueTimestamps[0], e = this.audioContext.createBufferSource();
         e.buffer = i, e.connect(this.audioGain), e.playbackRate.value = this.playbackSpeed;
-        const s = performance.now(), a = t * this.playbackSpeed, o = this.audioContext.currentTime + Math.max(0, (a - (s - this.startTime)) / 1e3), r = Math.max(
+        const s = performance.now(), o = t * this.playbackSpeed, a = this.audioContext.currentTime + Math.max(0, (o - (s - this.startTime)) / 1e3), r = Math.max(
           this.audioContext.currentTime,
-          Math.max(o, this.nextAudioStartTime)
+          Math.max(a, this.nextAudioStartTime)
         );
         if (e.start(r), this.nextAudioStartTime = r + i.duration / this.playbackSpeed, this.audioQueue.shift(), this.audioQueueTimestamps.shift(), this.nextAudioStartTime > this.audioContext.currentTime + this.audioScheduleAheadTime)
           break;
@@ -81,13 +81,14 @@ class v {
   setPlaybackSpeed(i) {
     if (i <= 0)
       throw new Error("Playback speed must be greater than 0");
-    this.playbackSpeed = i;
+    const t = this.getCurrentTime();
+    this.startTime = performance.now() - t / i, this.playbackSpeed = i, console.log("playbackSpeed", this.playbackSpeed);
   }
   seek(i) {
     if (!this.isPlaying)
       return;
-    const t = this.findNearestKeyFrame(i);
-    this.videoBuffer = this.videoBuffer.filter((e) => e.timestamp >= t), this.audioBuffer = this.audioBuffer.filter((e) => e.timestamp >= t), this.audioQueue = [], this.audioQueueTimestamps = [], this.audioContext && (this.nextAudioStartTime = this.audioContext.currentTime), this.timeOffset = i, this.startTime = performance.now() - i, this.seekTime = t;
+    const t = this.findNearestKeyFrame(i * 1e3);
+    this.videoBuffer = this.videoBuffer.filter((e) => e.timestamp >= t), this.audioBuffer = this.audioBuffer.filter((e) => e.timestamp >= t), this.audioQueue = [], this.audioQueueTimestamps = [], this.audioContext && (this.nextAudioStartTime = this.audioContext.currentTime), this.timeOffset = i * 1e3, this.startTime = performance.now() - i * 1e3, this.seekTime = t;
   }
   findNearestKeyFrame(i) {
     for (let t = this.keyFrameList.length - 1; t >= 0; t--)
@@ -96,17 +97,17 @@ class v {
     return this.keyFrameList[0] || 0;
   }
   start() {
-    this.isPlaying || (this.isPlaying = !0, this.pausedAt !== null ? (this.startTime = performance.now() - this.pausedAt, this.pausedAt = null) : this.startTime = performance.now() - this.timeOffset, this.processInitialFrame(), this.processNextFrame(), this.audioContext ? this.audioContext.state === "suspended" && this.audioContext.resume() : this.initAudioContext(), this.scheduleAudioPlayback());
+    this.isPlaying || (this.isPlaying = !0, this.pausedAt !== null ? (this.startTime = performance.now() - this.pausedAt, this.pausedAt = null) : this.startTime = performance.now() - this.timeOffset, this.processNextFrame(), this.audioContext ? this.audioContext.state === "suspended" && this.audioContext.resume() : this.initAudioContext(), this.scheduleAudioPlayback());
   }
   stop() {
     this.isPlaying && (this.isPlaying = !1, this.pausedAt = this.getCurrentTime(), this.animationFrameId !== null && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = null), this.audioContext && this.audioContext.state === "running" && this.audioContext.suspend());
   }
   getCurrentTime() {
-    return this.pausedAt !== null ? this.pausedAt : (performance.now() - this.startTime) * this.playbackSpeed;
+    return this.pausedAt !== null ? this.pausedAt : (performance.now() - this.startTime + this.timeOffset) * this.playbackSpeed;
   }
   processInitialFrame() {
     if (this.videoBuffer.length > 0) {
-      const i = this.videoBuffer[0];
+      const i = this.videoBuffer.shift();
       i && this.videoDecoder.decode(i);
     }
   }
@@ -114,7 +115,7 @@ class v {
     if (!this.isPlaying)
       return;
     const i = this.getCurrentTime();
-    if (this.seekTime !== null) {
+    if (this.videoBuffer.length && console.log(this.videoBuffer.length, this.videoBuffer[this.videoBuffer.length - 1].timestamp, i), this.seekTime !== null) {
       for (; this.videoBuffer.length > 0 && this.videoBuffer[0].timestamp < this.seekTime; )
         this.videoBuffer.shift();
       for (; this.audioBuffer.length > 0 && this.audioBuffer[0].timestamp < this.seekTime; )
@@ -124,6 +125,12 @@ class v {
     if (this.videoBuffer.length > 0 && this.videoBuffer[0].timestamp <= i) {
       const t = this.videoBuffer.shift();
       t && this.videoDecoder.decode(t);
+    }
+    if (this.videoBuffer.length > 0) {
+      const t = this.videoBuffer.findIndex(
+        (e, s) => s > 0 && e.type === "key"
+      );
+      t !== -1 && this.videoBuffer.slice(0, t).every((o) => o.timestamp <= i) && this.videoBuffer.splice(0, t);
     }
     if (this.audioBuffer.length > 0 && this.audioBuffer[0].timestamp <= i) {
       const t = this.audioBuffer.shift();
@@ -136,18 +143,14 @@ class v {
       console.warn("Video buffer full, dropping frame");
       return;
     }
-    i.type === "key" && this.keyFrameList.push(i.timestamp), this.videoBuffer.push(i), this.isPlaying || this.start();
+    i.type === "key" && this.keyFrameList.push(i.timestamp), this.videoBuffer.push(i);
   }
   decodeAudio(i) {
     if (this.audioBuffer.length >= this.maxBufferSize) {
       console.warn("Audio buffer full, dropping frame");
       return;
     }
-    this.audioBuffer.push(i), this.isPlaying || this.start();
-  }
-  // Get current playback position
-  getCurrentPosition() {
-    return this.getCurrentTime();
+    this.audioBuffer.push(i);
   }
   // Dispose of resources
   dispose() {
@@ -155,5 +158,5 @@ class v {
   }
 }
 export {
-  v as SoftDecoder
+  T as SoftDecoder
 };

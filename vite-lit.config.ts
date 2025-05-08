@@ -1,32 +1,25 @@
 import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue()],
   build: {
     lib: {
       entry: 'src/components/video-player.ts',
       name: 'VideoPlayer',
-      fileName: 'video-player',
-      formats: ['es']
+      formats: ['es'],
+      fileName: 'video-player' // Specify the output filename, .js will be appended by Vite
     },
     rollupOptions: {
-      external: ['lit'],
+      external: [], // Attempt to bundle all dependencies
       output: {
-        dir: 'src/components',
+        dir: 'src/components', // Output directory
         format: 'es',
-        preserveModules: true,
-        preserveModulesRoot: 'src',
-        entryFileNames: '[name].js',
-        paths: {
-          lit: '/node_modules/lit/index.js',
-          'lit/decorators.js': '/node_modules/lit/decorators.js'
-        }
+        preserveModules: false, // Set to false to bundle dependencies
+        paths: {}
       }
     },
     target: 'esnext',
-    outDir: 'src/components',
+    outDir: 'src/components', // Ensure this matches rollupOptions.output.dir
     emptyOutDir: false
   },
   esbuild: {
@@ -34,7 +27,7 @@ export default defineConfig({
     jsxFragment: 'Fragment'
   },
   optimizeDeps: {
-    include: ['lit'],
+    include: [],
     esbuildOptions: {
       plugins: [
         {
@@ -50,7 +43,7 @@ export default defineConfig({
               });
               return {
                 contents: result.code,
-                loader: 'js'
+                loader: args.path.endsWith('.ts') ? 'ts' : 'js',
               };
             });
           }
@@ -58,4 +51,4 @@ export default defineConfig({
       ]
     }
   }
-})
+});
