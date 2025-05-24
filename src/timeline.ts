@@ -281,6 +281,59 @@ class Timeline {
       this.currentTime = start;
       this.video.play();
     }
+  };  onError = async (e: Event) => {
+    console.error('MediaSource error:', e);
+    
+    // 检查video元素的错误状态
+    if (this.video.error) {
+      console.error('Video error details:', {
+        code: this.video.error.code,
+        message: this.video.error.message,
+        MEDIA_ERR_ABORTED: this.video.error.MEDIA_ERR_ABORTED,
+        MEDIA_ERR_NETWORK: this.video.error.MEDIA_ERR_NETWORK,
+        MEDIA_ERR_DECODE: this.video.error.MEDIA_ERR_DECODE,
+        MEDIA_ERR_SRC_NOT_SUPPORTED: this.video.error.MEDIA_ERR_SRC_NOT_SUPPORTED
+      });
+      
+      try {
+        // 获取当前播放位置
+        const currentPos = this.position;
+        const targetTime = currentPos + 0.5; // 跳转到当前位置后0.5秒
+        
+        // 暂停视频并重置状态
+        this.video.pause();
+        
+        // 如果使用软解码器
+        if (this.softDecoder) {
+          console.log(`Recovering from error, seeking to ${targetTime}s`);
+          await this.seek(targetTime);
+        } else {
+          // 使用MSE的情况下，尝试重置MediaSource状态
+          if (this.mediaSource && this.mediaSource.readyState === 'open') {
+            // 清除当前缓冲区
+            if (this.sourceBufferProxy && this.video.buffered.length > 0) {
+              const bufferStart = this.video.buffered.start(0);
+              const bufferEnd = this.video.buffered.end(this.video.buffered.length - 1);
+              await this.sourceBufferProxy.remove(bufferStart, bufferEnd);
+            }
+          }
+          
+          console.log(`Recovering from error, seeking to ${targetTime}s`);
+          await this.seek(targetTime);
+        }
+        
+        console.log('Error recovery completed, resuming playback');
+      } catch (recoveryError) {
+        console.error('Failed to recover from video error:', recoveryError);
+        // 如果恢复失败，可以考虑重新加载整个视频源
+        if (this.urlSrouce) {
+          console.log('Attempting to reload video source');
+          const currentUrl = this.urlSrouce;
+          this.destroy();
+          // 这里可能需要外部提供重新加载的机制
+        }
+      }
+    }
   };
   constructor(public video: HTMLVideoElement, opt: { debug: boolean; } = { debug: false }) {
     this.debug = opt.debug;
@@ -311,6 +364,7 @@ class Timeline {
         });
         this.video.addEventListener('timeupdate', this.updatePosition);
         this.video.addEventListener('waiting', this.onWaiting);
+        this.video.addEventListener('error', this.onError);
         break;
       case 'fmp4':
         // this.singleFmp4 = true;
@@ -333,6 +387,7 @@ class Timeline {
     this.video.src = '';
     this.video.removeEventListener('timeupdate', this.updatePosition);
     this.video.removeEventListener('waiting', this.onWaiting);
+    this.video.removeEventListener('error', this.onError);
     if (this.mediaSource?.readyState === 'open') {
       this.mediaSource.endOfStream();
     }

@@ -56,7 +56,7 @@ const formattedTotalDuration = computed(() => {
   return formatTime(totalDuration.value);
 });
 
-const playbackRates = [0.5, 1, 1.5, 2, 3, 4];
+const playbackRates = [0.5, 1, 1.5, 2, 3, 4, 8, 16];
 
 function formatTime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
