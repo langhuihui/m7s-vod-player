@@ -45,13 +45,13 @@ class MediaSegment {
     const data = await this.data;
     if (this.tracks.length === 0) {
       this.tracks = this.fmp4Parser.parse(data);
+    }
+    if (!bufferProxy.initialized) {
       const codec = `video/mp4; codecs="${this.tracks.map(track => track.codec).join(', ')}"`;
-      if (!bufferProxy.initialized) {
-        if (MediaSource.isTypeSupported(codec)) {
-          bufferProxy.init(codec);
-        } else {
-          throw new Error(`Unsupported codec: ${codec}`);
-        }
+      if (MediaSource.isTypeSupported(codec)) {
+        bufferProxy.init(codec);
+      } else {
+        throw new Error(`Unsupported codec: ${codec}`);
       }
     }
     if (this.state !== 'loading') {
@@ -137,8 +137,10 @@ class SourceBufferProxy {
   queue: { data: ArrayBuffer, resolve: () => void, reject: (e: Event) => void; }[] = []; // 排队
   removeQueue: { start: number, end: number, resolve: () => void, reject: (e: Event) => void; }[] = [];
   currentWaiting?: () => void;
-  currentError: (e: Event) => void = () => { };
-  private sourceBuffer!: SourceBuffer;
+  currentError: (e: Event) => void = () => {
+    console.log(e);
+  };
+  sourceBuffer!: SourceBuffer;
   constructor(private mediaSource: MediaSource) {
   }
   get initialized() {
@@ -193,6 +195,18 @@ class SourceBufferProxy {
         this.removeQueue.push({ start, end, resolve, reject });
       });
     }
+  }
+  destroy() {
+    if (this.sourceBuffer) {
+      try {
+        this.mediaSource.removeSourceBuffer(this.sourceBuffer);
+      } catch (e) { }
+      this.sourceBuffer = undefined as any;
+    }
+    this.queue = [];
+    this.removeQueue = [];
+    delete this.currentWaiting;
+    this.currentError = () => { };
   }
 }
 
@@ -282,6 +296,35 @@ class Timeline {
       this.video.play();
     }
   };
+  onError = async (e: Event) => {
+    console.error('Video error:', e);
+    const lastTimestamp = this.position;
+    this.video.pause();
+    this.video.src = '';
+    if (this.softDecoder) {
+      this.softDecoder.dispose();
+    }
+    this.sourceBufferProxy?.destroy();
+    if (this.urlSrouce) {
+      URL.revokeObjectURL(this.urlSrouce);
+    }
+    this.mediaSource = new MediaSource();
+    const mediaSource = this.mediaSource;
+    this.urlSrouce = URL.createObjectURL(mediaSource);
+    this.sourceBufferProxy = new SourceBufferProxy(mediaSource);
+    mediaSource.addEventListener('sourceopen', async () => {
+      for (const segment of this.segments) {
+        if (segment.state === 'buffered') {
+          await this.appendSegment(segment);
+        }
+      }
+      this.seek(lastTimestamp + 1);
+    });
+    mediaSource.addEventListener('sourceended', () => {
+      this.video.pause();
+    });
+    this.video.src = this.urlSrouce!;
+  };
   constructor(public video: HTMLVideoElement, opt: { debug: boolean; } = { debug: false }) {
     this.debug = opt.debug;
   }
@@ -311,6 +354,7 @@ class Timeline {
         });
         this.video.addEventListener('timeupdate', this.updatePosition);
         this.video.addEventListener('waiting', this.onWaiting);
+        this.video.addEventListener('error', this.onError);
         break;
       case 'fmp4':
         // this.singleFmp4 = true;
@@ -333,6 +377,7 @@ class Timeline {
     this.video.src = '';
     this.video.removeEventListener('timeupdate', this.updatePosition);
     this.video.removeEventListener('waiting', this.onWaiting);
+    this.video.removeEventListener('error', this.onError);
     if (this.mediaSource?.readyState === 'open') {
       this.mediaSource.endOfStream();
     }
@@ -435,11 +480,13 @@ class Timeline {
     else return this.video.currentTime;
   }
   async seek(time: number) {
+    console.log('seek', time);
     if (!this.currentSegment) return;
     const targetSegment = this.segments.find(segment => segment.virtualEndTime > time);
     if (!targetSegment) {
       return;
     }
+    console.log('targetSegment', targetSegment);
     const offsetInSegment = time - targetSegment.virtualStartTime;
     const bufferRemain = this.currentSegment.virtualEndTime - this.position;
     const nextSegment = this.segments[targetSegment.index + 1];

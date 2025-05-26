@@ -35,7 +35,7 @@ export class SoftDecoder {
     this.canvas = document.createElement('canvas');
     this.canvas.style.width = '160px';
     this.canvas.style.height = '120px';
-    document.body.appendChild(this.canvas);
+    // document.body.appendChild(this.canvas);
     if (options?.yuvMode || false) {
       this.yuvRenderer = new YuvRenderer(this.canvas);
     } else {
