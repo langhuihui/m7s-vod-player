@@ -38,6 +38,8 @@ const isFullscreen = ref(false);
 const isVolumeDragging = ref(false);
 const singleFmp4 = ref(false);
 const isWideScreen = ref(true); // Added for responsive control
+const isLoading = ref(false); // Loading 状态
+const isUserPaused = ref(false); // 用户是否主动暂停
 
 // Expose video element to parent component
 defineExpose({
@@ -191,9 +193,11 @@ function togglePlay() {
   if (!video.value) return;
 
   if (video.value.paused) {
+    isUserPaused.value = false;
     video.value.play();
     isPlaying.value = true;
   } else {
+    isUserPaused.value = true;
     video.value.pause();
     isPlaying.value = false;
   }
@@ -335,15 +339,27 @@ watch(
     if (timeline.value) timeline.value.destroy();
     if (!src) return;
     if (video.value) {
+      // 开始加载时显示 loading
+      isLoading.value = true;
+
       const tl = new Timeline(video.value, { debug: props.debug });
       timeline.value = tl;
+
       currentPosition.value = 0;
       totalDuration.value = 0; // Reset duration when changing source
-      tl.load(src).then(() => {
-        singleFmp4.value = tl.singleFmp4;
-        totalDuration.value = tl.totalDuration; // Update duration when loaded
-        emit("segments", tl.segments);
-      });
+      tl.load(src)
+        .then(() => {
+          singleFmp4.value = tl.singleFmp4;
+          totalDuration.value = tl.totalDuration; // Update duration when loaded
+          emit("segments", tl.segments);
+          // 加载完成后隐藏 loading
+          isLoading.value = false;
+        })
+        .catch((error) => {
+          console.error("Failed to load video:", error);
+          // 加载失败也要隐藏 loading
+          isLoading.value = false;
+        });
     }
   }
 );
@@ -356,10 +372,41 @@ onMounted(() => {
   // Listen for play and pause events to update state
   video.value.addEventListener("play", () => {
     isPlaying.value = true;
+    // 当用户主动播放时，隐藏 loading
+    if (!isUserPaused.value) {
+      isLoading.value = false;
+    }
   });
 
   video.value.addEventListener("pause", () => {
     isPlaying.value = false;
+    // 当视频暂停时，如果不是用户主动暂停，可能需要显示 loading
+    isLoading.value = !isUserPaused.value;
+  });
+
+  // 监听视频的 waiting 事件（缓冲中）
+  video.value.addEventListener("waiting", () => {
+    // 只有在非用户主动暂停状态下才显示 loading
+    isLoading.value = !isUserPaused.value;
+  });
+
+  // 监听视频的 canplay 事件（可以播放）
+  video.value.addEventListener("canplay", () => {
+    // 当视频可以播放时，隐藏 loading
+    isLoading.value = false;
+  });
+
+  // 监听视频的 playing 事件（正在播放）
+  video.value.addEventListener("playing", () => {
+    // 当视频开始播放时，隐藏 loading
+    isLoading.value = false;
+  });
+
+  // 监听视频的 error 事件（timeline 出错时）
+  video.value.addEventListener("error", (e) => {
+    console.error("Video error occurred:", e);
+    // timeline 出错时也要隐藏 loading
+    isLoading.value = false;
   });
 
   // Initialize volume
@@ -387,12 +434,7 @@ onUnmounted(() => {
   // Remove event listeners if video element exists
   if (video.value) {
     video.value.removeEventListener("timeupdate", updateTimelineUI);
-    video.value.removeEventListener("play", () => {
-      isPlaying.value = true;
-    });
-    video.value.removeEventListener("pause", () => {
-      isPlaying.value = false;
-    });
+    // Note: 其他事件监听器使用匿名函数，无法精确移除，但组件销毁时会自动清理
   }
 });
 </script>
@@ -407,6 +449,14 @@ onUnmounted(() => {
   >
     <!-- Video element -->
     <video ref="video" @click="togglePlay" :controls="singleFmp4"></video>
+
+    <!-- Loading indicator -->
+    <div v-if="isLoading" class="loading-overlay">
+      <div class="loading-spinner">
+        <div class="spinner"></div>
+        <span class="loading-text">加载中...</span>
+      </div>
+    </div>
 
     <!-- Custom timeline UI -->
     <div
@@ -847,5 +897,51 @@ video {
 .video-player:fullscreen video {
   height: 100vh;
   object-fit: contain;
+}
+
+/* Loading overlay styles */
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top: 3px solid #ffffff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
 }
 </style>

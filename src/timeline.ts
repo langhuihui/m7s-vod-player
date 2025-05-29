@@ -281,10 +281,12 @@ class Timeline {
   debug: boolean = false;
   singleFmp4: boolean = false;
   softDecoder?: SoftDecoder;
+
   updatePosition = () => {
     this.position = this.currentTime + this.offset;
     this.checkBuffer();
   };
+
   onWaiting = () => {
     const buffered = this.video.buffered;
     for (let i = 0; i < buffered.length; i++) {
@@ -293,12 +295,14 @@ class Timeline {
         continue;
       }
       this.currentTime = start;
-      this.video.play();
+      this.video.play().catch(() => {
+        // 播放失败时的错误处理
+      });
     }
   };
   onError = async (e: Event) => {
     console.error('Video error:', e);
-    const lastTimestamp = this.position;
+    const targetPos = this.position + 1;
     this.video.pause();
     this.video.src = '';
     if (this.softDecoder) {
@@ -312,16 +316,30 @@ class Timeline {
     const mediaSource = this.mediaSource;
     this.urlSrouce = URL.createObjectURL(mediaSource);
     this.sourceBufferProxy = new SourceBufferProxy(mediaSource);
-    mediaSource.addEventListener('sourceopen', async () => {
-      for (const segment of this.segments) {
-        if (segment.state === 'buffered') {
-          await this.appendSegment(segment);
-        }
+    this.segments.forEach(segment => {
+      if (segment.state === 'buffered') {
+        segment.state = 'loaded';
       }
-      this.seek(lastTimestamp + 1);
+    });
+    mediaSource.addEventListener('sourceopen', async () => {
+      const targetSegment = this.segments.find(segment => segment.virtualEndTime > targetPos);
+      if (!targetSegment) {
+        console.warn('No segment found for target position:', targetPos);
+        return;
+      }
+      await this.appendSegment(targetSegment);
+      const offsetInSegment = targetPos - targetSegment.virtualStartTime;
+      this.offset = 0;
+      this.currentTime = offsetInSegment;
+      this.checkBuffer();
+      return this.video.play();
     });
     mediaSource.addEventListener('sourceended', () => {
+      console.log('MediaSource ended');
       this.video.pause();
+    });
+    mediaSource.addEventListener('sourceclose', () => {
+      console.log('MediaSource closed');
     });
     this.video.src = this.urlSrouce!;
   };
@@ -479,66 +497,193 @@ class Timeline {
     if (this.softDecoder) return this.softDecoder.getCurrentTime() / 1000 + this._offset;
     else return this.video.currentTime;
   }
+  /**
+   * 跳转到指定时间点
+   * 支持两种播放模式：软解码器模式和 MSE（Media Source Extensions）模式
+   * 
+   * @param time 目标时间点（秒）
+   */
   async seek(time: number) {
     console.log('seek', time);
-    if (!this.currentSegment) return;
+
+    // 基础检查：确保存在当前片段
+    if (!this.currentSegment) {
+      console.warn('Seek failed: no current segment available');
+      return;
+    }
+    this.video.pause(); // 暂停视频播放，准备跳转
+    // 查找包含目标时间的片段
+    // 使用 virtualEndTime > time 查找，因为我们需要第一个结束时间大于目标时间的片段
     const targetSegment = this.segments.find(segment => segment.virtualEndTime > time);
     if (!targetSegment) {
+      // 目标时间超出所有片段范围，无法跳转
+      console.warn(`Seek failed: target time ${time}s exceeds total duration ${this.totalDuration}s`);
       return;
     }
     console.log('targetSegment', targetSegment);
-    const offsetInSegment = time - targetSegment.virtualStartTime;
-    const bufferRemain = this.currentSegment.virtualEndTime - this.position;
-    const nextSegment = this.segments[targetSegment.index + 1];
 
+    // 计算关键参数
+    const offsetInSegment = time - targetSegment.virtualStartTime; // 目标时间在目标片段内的偏移量
+    const bufferRemain = this.currentSegment.virtualEndTime - this.position; // 当前片段剩余缓冲时间
+    const nextSegment = this.segments[targetSegment.index + 1]; // 获取目标片段的下一个片段用于预加载
+
+    // 软解码器模式的跳转逻辑
     if (this.softDecoder) {
-      // Clear all segment buffers regardless of seeking to different segment or within same segment
+      // 第一步：清理所有片段的缓冲数据
+      // 无论是跳转到不同片段还是在同一片段内跳转，都需要清理缓冲
       this.segments.forEach(segment => {
         segment.unBuffer();
       });
 
-      // Reset softDecoder internal buffers completely
+      // 第二步：完全重置软解码器内部缓冲区
+      // 清空视频和音频缓冲区，确保没有旧数据残留
       this.softDecoder.videoBuffer = [];
       this.softDecoder.audioBuffer = [];
 
-      // Load target segment
+      // 第三步：加载目标片段数据
       await targetSegment.load2(this.softDecoder);
+      // 预加载下一个片段以确保播放连续性
       if (nextSegment) await this.appendSegment(nextSegment);
+
+      // 第四步：软解码器执行跳转
       this.softDecoder.seek(time);
 
-      // Update time tracking
-      this.offset = time - this.currentTime;
-      this.position = time;
-      this.currentSegment = targetSegment;
+      // 第五步：更新时间轴状态
+      this.offset = time - this.currentTime; // 重新计算时间偏移量
+      this.position = time;                   // 更新当前位置
+      this.currentSegment = targetSegment;    // 更新当前片段引用
 
-
+      // 第六步：检查缓冲状态并开始播放
       this.checkBuffer();
       return this.video.play();
     }
 
-    // Regular MSE-based seeking logic (unchanged)
+    // MSE（Media Source Extensions）模式的跳转逻辑
+    console.log('[MSE Seek] Starting MSE-based seeking logic', offsetInSegment, bufferRemain, nextSegment);
+
+    // 快速跳转：如果目标片段已经缓冲完成
     if (targetSegment.state === 'buffered') {
+      console.log('[MSE Seek] Fast seek: target segment already buffered', {
+        segmentIndex: targetSegment.index,
+        currentSegmentIndex: this.currentSegment.index,
+        targetTime: time,
+        segmentRange: `${targetSegment.virtualStartTime}s - ${targetSegment.virtualEndTime}s`
+      });
+
       this.position = time;
       this.currentTime = time - this.offset;
+
+      // 如果跳转到下一个连续片段，执行正常的缓冲切换
       if (targetSegment.index === this.currentSegment.index + 1) {
+        console.log('[MSE Fast Seek] Switching to next consecutive segment, calling bufferNext()');
         this.bufferNext();
+      } else {
+        console.log('[MSE Fast Seek] Non-consecutive segment jump, updating currentSegment directly');
+        this.currentSegment = targetSegment;
       }
+
+      console.log('[MSE Fast Seek] Fast seek completed, starting playback');
+      this.checkBuffer();
       return this.video.play();
     }
+
+    // 完整重建：目标片段未缓冲的情况
+    console.log('[MSE Seek] Full rebuild: target segment not buffered', {
+      segmentIndex: targetSegment.index,
+      segmentState: targetSegment.state,
+      targetTime: time,
+      segmentRange: `${targetSegment.virtualStartTime}s - ${targetSegment.virtualEndTime}s`
+    });
+
+    // 第一步：清理所有片段缓冲状态
+    console.log('[MSE Seek 1] Step 1: Clearing all segment buffer states');
     this.segments.forEach(segment => {
       segment.unBuffer();
     });
-    const bufferStart = this.video.buffered.start(0);
-    const bufferEnd = this.video.buffered.end(this.video.buffered.length - 1);
-    await targetSegment.load(this.sourceBufferProxy!);
-    if (nextSegment) await this.appendSegment(nextSegment);
+
+    // 第二步：记录当前 SourceBuffer 的缓冲范围，准备清除
+    let bufferStart = 0;
+    let bufferEnd = 0;
+    try {
+      if (this.video.buffered.length > 0) {
+        bufferStart = this.video.buffered.start(0);
+        bufferEnd = this.video.buffered.end(this.video.buffered.length - 1);
+        console.log('[MSE Seek 2] Step 2: Recorded current buffer range', {
+          bufferStart: bufferStart.toFixed(2),
+          bufferEnd: bufferEnd.toFixed(2),
+          bufferCount: this.video.buffered.length
+        });
+      } else {
+        console.log('[MSE Seek 2] Step 2: No existing buffer ranges to clear');
+      }
+    } catch (error) {
+      console.warn('[MSE Seek 2] Step 2: Failed to get buffer ranges, continuing without removal', error);
+    }
+
+    // 第三步：加载目标片段到 SourceBuffer
+    try {
+      console.log('[MSE Seek 3] Step 3: Loading target segment to SourceBuffer');
+      await targetSegment.load(this.sourceBufferProxy!);
+      console.log('[MSE Seek 3] Target segment loaded successfully');
+
+      // 预加载下一个片段
+      if (nextSegment) {
+        console.log('[MSE Seek 3] Preloading next segment', { nextSegmentIndex: nextSegment.index });
+        await this.appendSegment(nextSegment);
+        console.log('[MSE Seek 3] Next segment preloaded successfully');
+      } else {
+        console.log('[MSE Seek 3] No next segment to preload (reached end of playlist)');
+      }
+    } catch (error) {
+      console.error('[MSE Seek 3] Step 3: Failed to load target segment', error);
+      console.warn(`[MSE Seek 3] Seek failed: unable to load segment ${targetSegment.index}`);
+      return;
+    }
+
     this.printSegments();
-    this.currentTime += offsetInSegment + bufferRemain + nextSegment.duration;
-    this.offset = time - this.currentTime;
-    this.position = time;
-    await this.sourceBufferProxy!.remove(bufferStart, bufferEnd);
+
+    // 第四步：计算并设置新的播放时间
+    console.log('[MSE Seek 4] Step 4: Calculating new playback time', {
+      offsetInSegment: offsetInSegment.toFixed(2),
+      bufferRemain: bufferRemain.toFixed(2),
+      nextSegmentDuration: nextSegment?.duration.toFixed(2) || 'N/A',
+      currentTime: this.currentTime.toFixed(2)
+    });
+
+    // 这个计算比较复杂，考虑了片段内偏移、剩余缓冲和下一片段时长
+    if (nextSegment) {
+      this.currentTime += offsetInSegment + bufferRemain + nextSegment.duration;
+    } else {
+      this.currentTime += offsetInSegment + bufferRemain;
+    }
+    this.offset = time - this.currentTime; // 重新计算时间偏移
+    this.position = time;                   // 更新位置
+
+    console.log('[MSE Seek 4] New time state calculated', {
+      newCurrentTime: this.currentTime.toFixed(2),
+      newOffset: this.offset.toFixed(2),
+      newPosition: this.position.toFixed(2)
+    });
+
+    // 第五步：移除旧的缓冲数据
+    try {
+      if (this.video.buffered.length > 0) {
+        console.log('[MSE Seek 5] Step 5: Removing old buffer data');
+        await this.sourceBufferProxy!.remove(bufferStart, bufferEnd);
+        console.log('[MSE Seek 5] Old buffer data removed successfully');
+      } else {
+        console.log('[MSE Seek 5] Step 5: No old buffer data to remove');
+      }
+    } catch (error) {
+      console.warn('[MSE Seek 5] Step 5: Failed to remove old buffer data, continuing anyway', error);
+    }
+
+    // 第六步：更新当前片段并检查缓冲状态
+    console.log('[MSE Seek 6] Step 6: Updating current segment and checking buffer');
     this.currentSegment = targetSegment;
     this.checkBuffer();
+
+    console.log('[MSE Seek 6] Full rebuild completed, starting playback');
     return this.video.play();
   }
 }

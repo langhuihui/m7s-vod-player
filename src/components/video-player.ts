@@ -306,6 +306,48 @@ export class VideoPlayer extends LitElement {
       height: 100vh;
       object-fit: contain;
     }
+
+    /* Loading overlay styles */
+    .loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .loading-spinner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-top: 3px solid #ffffff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 500;
+      text-align: center;
+    }
   `;
 
   static properties = {
@@ -325,7 +367,9 @@ export class VideoPlayer extends LitElement {
     isFullscreen: { type: Boolean, state: true },
     isVolumeDragging: { type: Boolean, state: true },
     singleFmp4: { type: Boolean, state: true },
-    isWideScreen: { type: Boolean, state: true }
+    isWideScreen: { type: Boolean, state: true },
+    isLoading: { type: Boolean, state: true },
+    isUserPaused: { type: Boolean, state: true }
   } as const;
 
   constructor() {
@@ -348,6 +392,8 @@ export class VideoPlayer extends LitElement {
     this.isVolumeDragging = false;
     this.singleFmp4 = false;
     this.isWideScreen = true;
+    this.isLoading = false;
+    this.isUserPaused = false;
   }
 
   // DOM references - using private fields instead of decorators
@@ -380,6 +426,8 @@ export class VideoPlayer extends LitElement {
   declare isVolumeDragging: boolean;
   declare singleFmp4: boolean;
   declare isWideScreen: boolean;
+  declare isLoading: boolean;
+  declare isUserPaused: boolean;
 
   // Getters for DOM references
   get video(): HTMLVideoElement {
@@ -452,10 +500,42 @@ export class VideoPlayer extends LitElement {
       // Listen for play and pause events to update state
       this.video.addEventListener('play', () => {
         this.isPlaying = true;
+        // 当用户主动播放时，隐藏 loading
+        if (!this.isUserPaused) {
+          this.isLoading = false;
+        }
       });
 
       this.video.addEventListener('pause', () => {
         this.isPlaying = false;
+        // 当视频暂停时，如果不是用户主动暂停，可能需要显示 loading
+      });
+
+      // 监听视频的 waiting 事件（缓冲中）
+      this.video.addEventListener('waiting', () => {
+        // 只有在非用户主动暂停状态下才显示 loading
+        if (!this.isUserPaused) {
+          this.isLoading = true;
+        }
+      });
+
+      // 监听视频的 canplay 事件（可以播放）
+      this.video.addEventListener('canplay', () => {
+        // 当视频可以播放时，隐藏 loading
+        this.isLoading = false;
+      });
+
+      // 监听视频的 playing 事件（正在播放）
+      this.video.addEventListener('playing', () => {
+        // 当视频开始播放时，隐藏 loading
+        this.isLoading = false;
+      });
+
+      // 监听视频的 error 事件（timeline 出错时）
+      this.video.addEventListener('error', (e) => {
+        console.error('Video error occurred:', e);
+        // timeline 出错时也要隐藏 loading
+        this.isLoading = false;
       });
 
       // Initialize volume
@@ -516,6 +596,9 @@ export class VideoPlayer extends LitElement {
 
     if (!this.src || !this.video) return;
 
+    // 开始加载时显示 loading
+    this.isLoading = true;
+
     const tl = new Timeline(this.video, { debug: this.debug });
     this.timeline = tl;
     this.currentPosition = 0;
@@ -529,6 +612,12 @@ export class VideoPlayer extends LitElement {
         bubbles: true,
         composed: true
       }));
+      // 加载完成后隐藏 loading
+      this.isLoading = false;
+    }).catch((error) => {
+      console.error('Failed to load video:', error);
+      // 加载失败也要隐藏 loading
+      this.isLoading = false;
     });
   }
 
@@ -644,9 +733,11 @@ export class VideoPlayer extends LitElement {
     if (!this.video) return;
 
     if (this.video.paused) {
+      this.isUserPaused = false;
       this.video.play();
       this.isPlaying = true;
     } else {
+      this.isUserPaused = true;
       this.video.pause();
       this.isPlaying = false;
     }
@@ -831,6 +922,16 @@ export class VideoPlayer extends LitElement {
       >
         <!-- Video element -->
         <video @click=${this.togglePlay} .controls=${this.singleFmp4}></video>
+
+        <!-- Loading indicator -->
+        ${this.isLoading ? html`
+          <div class="loading-overlay">
+            <div class="loading-spinner">
+              <div class="spinner"></div>
+              <span class="loading-text">加载中...</span>
+            </div>
+          </div>
+        ` : ''}
 
         <!-- Custom timeline UI -->
         ${this.timeline && !this.singleFmp4 ? html`
