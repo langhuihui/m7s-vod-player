@@ -8,12 +8,13 @@ import {
   onUnmounted,
   defineEmits,
 } from "vue";
-import { Timeline } from "../timeline";
+import { Engine } from "../engine";
 
 // No longer need the timeline prop as we'll create it internally
 const props = defineProps<{
   src?: string;
   debug?: boolean;
+  autoPlay?: boolean;
 }>();
 
 const video = ref<HTMLVideoElement>();
@@ -21,10 +22,11 @@ const playerRef = ref<HTMLDivElement>();
 const timelineRef = ref<HTMLDivElement>();
 const progressRef = ref<HTMLDivElement>();
 const bufferRef = ref<HTMLDivElement>();
+const loadingPercent = ref(0);
 const isDragging = ref(false);
 const isHovering = ref(false);
 const playbackRate = ref(1);
-const timeline = ref<Timeline>();
+const engine = ref<Engine>();
 const isPlaying = ref(false);
 const currentPosition = ref(0);
 const totalDuration = ref(0);
@@ -39,13 +41,12 @@ const isVolumeDragging = ref(false);
 const singleFmp4 = ref(false);
 const isWideScreen = ref(true); // Added for responsive control
 const isLoading = ref(false); // Loading 状态
-const isUserPaused = ref(false); // 用户是否主动暂停
 
 // Expose video element to parent component
 defineExpose({
   value: video,
   seek: (time: number) => {
-    timeline.value?.seek(time);
+    engine.value?.seek(time);
     currentPosition.value = time;
   },
 });
@@ -87,39 +88,39 @@ function updateTimelineUI() {
     !timelineRef.value ||
     !progressRef.value ||
     !bufferRef.value ||
-    !timeline.value
+    !engine.value
   )
     return;
 
-  currentPosition.value = timeline.value.position;
+  currentPosition.value = engine.value.position;
 
   // Update totalDuration reactively
-  if (totalDuration.value !== timeline.value.totalDuration) {
-    totalDuration.value = timeline.value.totalDuration;
+  if (totalDuration.value !== engine.value.totalDuration) {
+    totalDuration.value = engine.value.totalDuration;
   }
 
-  const percentage = (timeline.value.position / totalDuration.value) * 100;
+  const percentage = (engine.value.position / totalDuration.value) * 100;
   progressRef.value.style.width = `${percentage}%`;
 
   // Calculate buffered length as percentage of total duration
   const bufferPercentage =
-    ((timeline.value.bufferedLength + timeline.value.position) /
+    ((engine.value.position + engine.value.bufferedLength) /
       totalDuration.value) *
     100;
   bufferRef.value.style.width = `${bufferPercentage}%`;
-  emit("timeupdate", timeline.value.position);
+  emit("timeupdate", engine.value.position);
   // Update playing state
   isPlaying.value = !video.value?.paused;
 }
 
 function handleTimelineClick(event: MouseEvent) {
-  if (!timelineRef.value || !timeline.value) return;
+  if (!timelineRef.value || !engine.value) return;
 
   const rect = timelineRef.value.getBoundingClientRect();
   const clickPosition = (event.clientX - rect.left) / rect.width;
   const seekTime = clickPosition * totalDuration.value;
 
-  timeline.value.seek(seekTime);
+  engine.value.seek(seekTime);
   currentPosition.value = seekTime;
 }
 
@@ -133,7 +134,7 @@ function startDrag(event: MouseEvent) {
 }
 
 function handleDrag(event: MouseEvent) {
-  if (!isDragging.value || !timelineRef.value || !timeline.value) return;
+  if (!isDragging.value || !timelineRef.value || !engine.value) return;
 
   const rect = timelineRef.value.getBoundingClientRect();
   const dragPosition = (event.clientX - rect.left) / rect.width;
@@ -175,12 +176,7 @@ function changePlaybackRate(rate: number) {
   if (!video.value) return;
 
   playbackRate.value = rate;
-  video.value.playbackRate = rate;
-
-  // Update SoftDecoder's playback speed if it exists
-  if (timeline.value?.softDecoder) {
-    timeline.value.softDecoder.setPlaybackSpeed(rate);
-  }
+  if(engine.value) engine.value.playbackRate = rate;
 
   showPlaybackRateMenu.value = false;
 }
@@ -190,16 +186,12 @@ function togglePlaybackRateMenu() {
 }
 
 function togglePlay() {
-  if (!video.value) return;
+  if (!video.value || !engine.value) return;
 
-  if (video.value.paused) {
-    isUserPaused.value = false;
-    video.value.play();
-    isPlaying.value = true;
+  if (engine.value.isPlaying) {
+    engine.value.pause();
   } else {
-    isUserPaused.value = true;
-    video.value.pause();
-    isPlaying.value = false;
+    engine.value.play();
   }
 }
 
@@ -274,18 +266,18 @@ function startVolumeDrag(event: MouseEvent) {
 }
 
 function seekForward() {
-  if (!timeline.value) return;
+  if (!engine.value) return;
 
-  const newTime = Math.min(timeline.value.position + 10, totalDuration.value);
-  timeline.value.seek(newTime);
+  const newTime = Math.min(engine.value.position + 10, totalDuration.value);
+  engine.value.seek(newTime);
   currentPosition.value = newTime;
 }
 
 function seekBackward() {
-  if (!timeline.value) return;
+  if (!engine.value) return;
 
-  const newTime = Math.max(timeline.value.position - 10, 0);
-  timeline.value.seek(newTime);
+  const newTime = Math.max(engine.value.position - 10, 0);
+  engine.value.seek(newTime);
   currentPosition.value = newTime;
 }
 
@@ -336,22 +328,24 @@ function toggleFullscreen() {
 watch(
   () => (video.value ? props.src : null),
   (src) => {
-    if (timeline.value) timeline.value.destroy();
+    if (engine.value) engine.value.destroy();
     if (!src) return;
     if (video.value) {
       // 开始加载时显示 loading
       isLoading.value = true;
 
-      const tl = new Timeline(video.value, { debug: props.debug });
-      timeline.value = tl;
+      const eng = new Engine(video.value, { debug: props.debug, autoPlay:props.debug });
+      eng.on('progress', (progress) => {
+        loadingPercent.value = progress.percent
+      })
+      engine.value = eng;
 
       currentPosition.value = 0;
       totalDuration.value = 0; // Reset duration when changing source
-      tl.load(src)
+      eng.load(src)
         .then(() => {
-          singleFmp4.value = tl.singleFmp4;
-          totalDuration.value = tl.totalDuration; // Update duration when loaded
-          emit("segments", tl.segments);
+          totalDuration.value = eng.totalDuration; // Update duration when loaded
+          emit("segments", eng.segments);
           // 加载完成后隐藏 loading
           isLoading.value = false;
         })
@@ -372,22 +366,16 @@ onMounted(() => {
   // Listen for play and pause events to update state
   video.value.addEventListener("play", () => {
     isPlaying.value = true;
-    // 当用户主动播放时，隐藏 loading
-    if (!isUserPaused.value) {
-      isLoading.value = false;
-    }
+    // 当视频播放时，隐藏 loading
+    isLoading.value = false;
   });
 
   video.value.addEventListener("pause", () => {
     isPlaying.value = false;
-    // 当视频暂停时，如果不是用户主动暂停，可能需要显示 loading
-    isLoading.value = !isUserPaused.value;
-  });
-
-  // 监听视频的 waiting 事件（缓冲中）
-  video.value.addEventListener("waiting", () => {
-    // 只有在非用户主动暂停状态下才显示 loading
-    isLoading.value = !isUserPaused.value;
+    // 当视频暂停时，只有在 engine 正在播放状态下才显示 loading
+    if (engine.value?.isPlaying) {
+      isLoading.value = true;
+    }
   });
 
   // 监听视频的 canplay 事件（可以播放）
@@ -402,10 +390,10 @@ onMounted(() => {
     isLoading.value = false;
   });
 
-  // 监听视频的 error 事件（timeline 出错时）
+  // 监听视频的 error 事件（engine 出错时）
   video.value.addEventListener("error", (e) => {
     console.error("Video error occurred:", e);
-    // timeline 出错时也要隐藏 loading
+    // engine 出错时也要隐藏 loading
     isLoading.value = false;
   });
 
@@ -426,9 +414,9 @@ onMounted(() => {
 
 // Add cleanup for the interval when component is unmounted
 onUnmounted(() => {
-  // Clean up timeline if it exists
-  if (timeline.value) {
-    timeline.value.destroy();
+  // Clean up engine if it exists
+  if (engine.value) {
+    engine.value.destroy();
   }
 
   // Remove event listeners if video element exists
@@ -440,13 +428,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    class="video-player"
-    ref="playerRef"
-    @mouseenter="handleMouseEnter"
-    @mouseleave="handleMouseLeave"
-    @mousemove="handleMouseMove"
-  >
+  <div class="video-player" ref="playerRef" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
+    @mousemove="handleMouseMove">
     <!-- Video element -->
     <video ref="video" @click="togglePlay" :controls="singleFmp4"></video>
 
@@ -455,34 +438,20 @@ onUnmounted(() => {
       <div class="loading-spinner">
         <div class="spinner"></div>
         <span class="loading-text">加载中...</span>
+        <div  class="loading-text" v-if="engine">{{ loadingPercent.toFixed(2) }}%</div>
       </div>
     </div>
 
     <!-- Custom timeline UI -->
-    <div
-      v-if="timeline && !singleFmp4"
-      class="controls-overlay"
-      :class="{ 'show-controls': showControls || isDragging }"
-    >
+    <div v-if="engine && !singleFmp4" class="controls-overlay" :class="{ 'show-controls': showControls || isDragging }">
       <!-- Timeline slider -->
-      <div
-        class="timeline"
-        ref="timelineRef"
-        @click="handleTimelineClick"
-        @mouseenter="onTimelineMouseEnter"
-        @mouseleave="onTimelineMouseLeave"
-        :class="{ 'timeline-hover': isHovering }"
-      >
+      <div class="timeline" ref="timelineRef" @click="handleTimelineClick" @mouseenter="onTimelineMouseEnter"
+        @mouseleave="onTimelineMouseLeave" :class="{ 'timeline-hover': isHovering }">
         <div class="timeline-buffer" ref="bufferRef"></div>
         <div class="timeline-progress" ref="progressRef"></div>
-        <div
-          class="timeline-handle"
-          :class="{ 'timeline-handle-hover': isHovering || isDragging }"
-          :style="{
-            left: `${(currentPosition / (totalDuration || 1)) * 100}%`,
-          }"
-          @mousedown.stop="startDrag"
-        ></div>
+        <div class="timeline-handle" :class="{ 'timeline-handle-hover': isHovering || isDragging }" :style="{
+          left: `${(currentPosition / (totalDuration || 1)) * 100}%`,
+        }" @mousedown.stop="startDrag"></div>
       </div>
 
       <!-- Controls -->
@@ -496,20 +465,12 @@ onUnmounted(() => {
           </button>
 
           <!-- Rewind Button - Only visible on wide screens -->
-          <button
-            v-if="isWideScreen"
-            class="control-button"
-            @click="seekBackward"
-          >
+          <button v-if="isWideScreen" class="control-button" @click="seekBackward">
             <i class="icon-backward">◀◀</i>
           </button>
 
           <!-- Fast Forward Button - Only visible on wide screens -->
-          <button
-            v-if="isWideScreen"
-            class="control-button"
-            @click="seekForward"
-          >
+          <button v-if="isWideScreen" class="control-button" @click="seekForward">
             <i class="icon-forward">▶▶</i>
           </button>
 
@@ -523,57 +484,35 @@ onUnmounted(() => {
         <div class="controls-right">
           <!-- Playback rate control -->
           <div class="playback-rate-control">
-            <button
-              class="control-button playback-rate-button"
-              @click="togglePlaybackRateMenu"
-            >
+            <button class="control-button playback-rate-button" @click="togglePlaybackRateMenu">
               <span>{{ playbackRate }}x</span>
             </button>
             <div class="playback-rate-menu" v-if="showPlaybackRateMenu">
-              <button
-                v-for="rate in playbackRates"
-                :key="rate"
-                @click="changePlaybackRate(rate)"
-                :class="{ active: playbackRate === rate }"
-                class="playback-rate-option"
-              >
+              <button v-for="rate in playbackRates" :key="rate" @click="changePlaybackRate(rate)"
+                :class="{ active: playbackRate === rate }" class="playback-rate-option">
                 {{ rate }}x
               </button>
             </div>
           </div>
 
           <!-- Volume Control -->
-          <div
-            class="volume-control"
-            @mouseenter="showVolumeSlider = true"
-            @mouseleave="
-              () => {
-                if (!isVolumeDragging) {
-                  showVolumeSlider = false;
-                }
+          <div class="volume-control" @mouseenter="showVolumeSlider = true" @mouseleave="
+            () => {
+              if (!isVolumeDragging) {
+                showVolumeSlider = false;
               }
-            "
-          >
+            }
+          ">
             <button class="control-button" @click="toggleMute">
               <i v-if="isMuted || volume === 0" class="icon-volume-mute"></i>
               <i v-else-if="volume < 0.5" class="icon-volume-low"></i>
               <i v-else class="icon-volume-high"></i>
             </button>
             <div class="volume-slider-container" v-if="showVolumeSlider">
-              <div
-                class="volume-slider"
-                @click="handleVolumeChange"
-                @mousedown="startVolumeDrag"
-              >
+              <div class="volume-slider" @click="handleVolumeChange" @mousedown="startVolumeDrag">
                 <div class="volume-slider-track"></div>
-                <div
-                  class="volume-slider-fill"
-                  :style="{ height: `${volume * 100}%` }"
-                ></div>
-                <div
-                  class="volume-slider-thumb"
-                  :style="{ bottom: `${volume * 100}%` }"
-                ></div>
+                <div class="volume-slider-fill" :style="{ height: `${volume * 100}%` }"></div>
+                <div class="volume-slider-thumb" :style="{ bottom: `${volume * 100}%` }"></div>
               </div>
             </div>
           </div>
@@ -612,11 +551,9 @@ video {
   left: 0;
   right: 0;
   padding: 10px;
-  background: linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.7) 0%,
-    rgba(0, 0, 0, 0) 100%
-  );
+  background: linear-gradient(0deg,
+      rgba(0, 0, 0, 0.7) 0%,
+      rgba(0, 0, 0, 0) 100%);
   transition: opacity 0.3s ease, transform 0.3s ease;
   opacity: 0;
   transform: translateY(100%);
@@ -772,7 +709,8 @@ video {
 /* Volume Control - Fixed vertical implementation */
 .volume-control {
   position: relative;
-  z-index: 101; /* Ensure this is above other controls for mouseleave detection */
+  z-index: 101;
+  /* Ensure this is above other controls for mouseleave detection */
 }
 
 .volume-slider-container {
@@ -791,7 +729,8 @@ video {
 .volume-control:hover .volume-slider-container::after {
   content: "";
   position: absolute;
-  bottom: -15px; /* Match margin-bottom of slider container */
+  bottom: -15px;
+  /* Match margin-bottom of slider container */
   left: 0;
   width: 100%;
   height: 15px;
@@ -858,10 +797,8 @@ video {
   width: 20px;
   height: 20px;
   background: white;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3.63 3.63a.996.996 0 000 1.41L7.29 8.7 7 9H4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1h3l3.29 3.29c.63.63 1.71.18 1.71-.71v-4.17l4.18 4.18c-.49.37-1.02.68-1.6.91-.36.15-.58.53-.58.92 0 .72.73 1.18 1.39.91.8-.33 1.55-.77 2.22-1.31l1.34 1.34a.996.996 0 101.41-1.41L5.05 3.63c-.39-.39-1.02-.39-1.42 0zM19 12c0 .82-.15 1.61-.41 2.34l1.53 1.53c.56-1.17.88-2.48.88-3.87 0-3.83-2.4-7.11-5.78-8.4-.59-.23-1.22.23-1.22.86v.19c0 .38.25.71.61.85C17.18 6.54 19 9.06 19 12zm-8.71-6.29l-.17.17L12 7.76V6.41c0-.89-1.08-1.33-1.71-.7zM16.5 12A4.5 4.5 0 0014 7.97v1.79l2.48 2.48c.01-.08.02-.16.02-.24z'/%3E%3C/svg%3E")
-    no-repeat 50% 50%;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3.63 3.63a.996.996 0 000 1.41L7.29 8.7 7 9H4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1h3l3.29 3.29c.63.63 1.71.18 1.71-.71v-4.17l4.18 4.18c-.49.37-1.02.68-1.6.91-.36.15-.58.53-.58.92 0 .72.73 1.18 1.39.91.8-.33 1.55-.77 2.22-1.31l1.34 1.34a.996.996 0 101.41-1.41L5.05 3.63c-.39-.39-1.02-.39-1.42 0zM19 12c0 .82-.15 1.61-.41 2.34l1.53 1.53c.56-1.17.88-2.48.88-3.87 0-3.83-2.4-7.11-5.78-8.4-.59-.23-1.22.23-1.22.86v.19c0 .38.25.71.61.85C17.18 6.54 19 9.06 19 12zm-8.71-6.29l-.17.17L12 7.76V6.41c0-.89-1.08-1.33-1.71-.7zM16.5 12A4.5 4.5 0 0014 7.97v1.79l2.48 2.48c.01-.08.02-.16.02-.24z'/%3E%3C/svg%3E")
-    no-repeat 50% 50%;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3.63 3.63a.996.996 0 000 1.41L7.29 8.7 7 9H4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1h3l3.29 3.29c.63.63 1.71.18 1.71-.71v-4.17l4.18 4.18c-.49.37-1.02.68-1.6.91-.36.15-.58.53-.58.92 0 .72.73 1.18 1.39.91.8-.33 1.55-.77 2.22-1.31l1.34 1.34a.996.996 0 101.41-1.41L5.05 3.63c-.39-.39-1.02-.39-1.42 0zM19 12c0 .82-.15 1.61-.41 2.34l1.53 1.53c.56-1.17.88-2.48.88-3.87 0-3.83-2.4-7.11-5.78-8.4-.59-.23-1.22.23-1.22.86v.19c0 .38.25.71.61.85C17.18 6.54 19 9.06 19 12zm-8.71-6.29l-.17.17L12 7.76V6.41c0-.89-1.08-1.33-1.71-.7zM16.5 12A4.5 4.5 0 0014 7.97v1.79l2.48 2.48c.01-.08.02-.16.02-.24z'/%3E%3C/svg%3E") no-repeat 50% 50%;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3.63 3.63a.996.996 0 000 1.41L7.29 8.7 7 9H4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1h3l3.29 3.29c.63.63 1.71.18 1.71-.71v-4.17l4.18 4.18c-.49.37-1.02.68-1.6.91-.36.15-.58.53-.58.92 0 .72.73 1.18 1.39.91.8-.33 1.55-.77 2.22-1.31l1.34 1.34a.996.996 0 101.41-1.41L5.05 3.63c-.39-.39-1.02-.39-1.42 0zM19 12c0 .82-.15 1.61-.41 2.34l1.53 1.53c.56-1.17.88-2.48.88-3.87 0-3.83-2.4-7.11-5.78-8.4-.59-.23-1.22.23-1.22.86v.19c0 .38.25.71.61.85C17.18 6.54 19 9.06 19 12zm-8.71-6.29l-.17.17L12 7.76V6.41c0-.89-1.08-1.33-1.71-.7zM16.5 12A4.5 4.5 0 0014 7.97v1.79l2.48 2.48c.01-.08.02-.16.02-.24z'/%3E%3C/svg%3E") no-repeat 50% 50%;
 }
 
 .icon-volume-low::before {
@@ -870,10 +807,8 @@ video {
   width: 20px;
   height: 20px;
   background: white;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 9v6h4l5 5V4l-5 5H7z'/%3E%3C/svg%3E")
-    no-repeat 50% 50%;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 9v6h4l5 5V4l-5 5H7z'/%3E%3C/svg%3E")
-    no-repeat 50% 50%;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 9v6h4l5 5V4l-5 5H7z'/%3E%3C/svg%3E") no-repeat 50% 50%;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 9v6h4l5 5V4l-5 5H7z'/%3E%3C/svg%3E") no-repeat 50% 50%;
 }
 
 .icon-volume-high::before {
@@ -882,10 +817,8 @@ video {
   width: 20px;
   height: 20px;
   background: white;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'/%3E%3C/svg%3E")
-    no-repeat 50% 50%;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'/%3E%3C/svg%3E")
-    no-repeat 50% 50%;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'/%3E%3C/svg%3E") no-repeat 50% 50%;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'/%3E%3C/svg%3E") no-repeat 50% 50%;
 }
 
 /* Fullscreen styles */
@@ -933,6 +866,7 @@ video {
   0% {
     transform: rotate(0deg);
   }
+
   100% {
     transform: rotate(360deg);
   }

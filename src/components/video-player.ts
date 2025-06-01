@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import type { PropertyValues, PropertyDeclaration } from 'lit';
-import { Timeline } from '../timeline';
+import { Engine } from '../engine';
 
 export class VideoPlayer extends LitElement {
   static styles = css`
@@ -353,60 +353,24 @@ export class VideoPlayer extends LitElement {
   static properties = {
     src: { type: String },
     debug: { type: Boolean },
-    isDragging: { type: Boolean, state: true },
-    isHovering: { type: Boolean, state: true },
-    playbackRate: { type: Number, state: true },
-    isPlaying: { type: Boolean, state: true },
-    currentPosition: { type: Number, state: true },
-    totalDuration: { type: Number, state: true },
-    showControls: { type: Boolean, state: true },
-    volume: { type: Number, state: true },
-    isMuted: { type: Boolean, state: true },
-    showPlaybackRateMenu: { type: Boolean, state: true },
-    showVolumeSlider: { type: Boolean, state: true },
-    isFullscreen: { type: Boolean, state: true },
-    isVolumeDragging: { type: Boolean, state: true },
-    singleFmp4: { type: Boolean, state: true },
-    isWideScreen: { type: Boolean, state: true },
-    isLoading: { type: Boolean, state: true },
-    isUserPaused: { type: Boolean, state: true }
-  } as const;
-
-  constructor() {
-    super();
-    // Initialize properties
-    this.src = undefined;
-    this.debug = false;
-    this.isDragging = false;
-    this.isHovering = false;
-    this.playbackRate = 1;
-    this.isPlaying = false;
-    this.currentPosition = 0;
-    this.totalDuration = 0;
-    this.showControls = false;
-    this.volume = 1;
-    this.isMuted = false;
-    this.showPlaybackRateMenu = false;
-    this.showVolumeSlider = false;
-    this.isFullscreen = false;
-    this.isVolumeDragging = false;
-    this.singleFmp4 = false;
-    this.isWideScreen = true;
-    this.isLoading = false;
-    this.isUserPaused = false;
-  }
-
-  // DOM references - using private fields instead of decorators
-  private _video?: HTMLVideoElement;
-  private _timelineRef?: HTMLDivElement;
-  private _progressRef?: HTMLDivElement;
-  private _bufferRef?: HTMLDivElement;
-  private _playerRef?: HTMLDivElement;
-
-  // Internal state
-  private timeline?: Timeline;
-  private hideControlsTimeoutId: number | null = null;
-  private playbackRates = [0.5, 1, 1.5, 2, 3, 4];
+    isDragging: { type: Boolean },
+    isHovering: { type: Boolean },
+    playbackRate: { type: Number },
+    isPlaying: { type: Boolean },
+    currentPosition: { type: Number },
+    totalDuration: { type: Number },
+    showControls: { type: Boolean },
+    volume: { type: Number },
+    isMuted: { type: Boolean },
+    showPlaybackRateMenu: { type: Boolean },
+    showVolumeSlider: { type: Boolean },
+    isFullscreen: { type: Boolean },
+    isVolumeDragging: { type: Boolean },
+    singleFmp4: { type: Boolean },
+    isWideScreen: { type: Boolean },
+    isLoading: { type: Boolean },
+    isUserPaused: { type: Boolean },
+  };
 
   // Property declarations
   declare src?: string;
@@ -428,6 +392,37 @@ export class VideoPlayer extends LitElement {
   declare isWideScreen: boolean;
   declare isLoading: boolean;
   declare isUserPaused: boolean;
+
+  constructor() {
+    super();
+    this.debug = false;
+    this.isDragging = false;
+    this.isHovering = false;
+    this.playbackRate = 1;
+    this.isPlaying = false;
+    this.currentPosition = 0;
+    this.totalDuration = 0;
+    this.showControls = false;
+    this.volume = 1;
+    this.isMuted = false;
+    this.showPlaybackRateMenu = false;
+    this.showVolumeSlider = false;
+    this.isFullscreen = false;
+    this.isVolumeDragging = false;
+    this.singleFmp4 = false;
+    this.isWideScreen = true;
+    this.isLoading = false;
+    this.isUserPaused = false;
+  }
+
+  private _video?: HTMLVideoElement;
+  private _timelineRef?: HTMLDivElement;
+  private _progressRef?: HTMLDivElement;
+  private _bufferRef?: HTMLDivElement;
+  private _playerRef?: HTMLDivElement;
+  private engine?: Engine;
+  private hideControlsTimeoutId: number | null = null;
+  private playbackRates = [0.5, 1, 1.5, 2, 3, 4];
 
   // Getters for DOM references
   get video(): HTMLVideoElement {
@@ -473,22 +468,13 @@ export class VideoPlayer extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener('keydown', this.handleKeyDown);
-
-    if (this.timeline) {
-      this.timeline.destroy();
+    if (this.engine) {
+      this.engine.destroy();
     }
-
-    // Clean up event listeners
-    if (this.video) {
-      this.video.removeEventListener('timeupdate', this.updateTimelineUI);
-      this.video.removeEventListener('play', () => {
-        this.isPlaying = true;
-      });
-      this.video.removeEventListener('pause', () => {
-        this.isPlaying = false;
-      });
+    if (this.hideControlsTimeoutId !== null) {
+      window.clearTimeout(this.hideControlsTimeoutId);
     }
+    this.video?.removeEventListener('timeupdate', this.updateTimelineUI);
   }
 
   firstUpdated() {
@@ -555,14 +541,13 @@ export class VideoPlayer extends LitElement {
 
     // Set up the timeline if src is provided
     if (this.src) {
-      this.setupTimeline();
+      this.setupEngine();
     }
   }
 
   updated(changedProperties: PropertyValues) {
-    // Update timeline when src changes
-    if (changedProperties.has('src') && this.src) {
-      this.setupTimeline();
+    if (changedProperties.has('src')) {
+      this.setupEngine();
     }
   }
 
@@ -572,14 +557,12 @@ export class VideoPlayer extends LitElement {
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
 
+    const pad = (num: number) => num.toString().padStart(2, '0');
+
     if (hours > 0) {
-      return `${hours.toString().padStart(2, "0")}:${minutes
-        .toString()
-        .padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+      return `${pad(hours)}:${pad(minutes)}:${pad(secs)}`;
     } else {
-      return `${minutes.toString().padStart(2, "0")}:${secs
-        .toString()
-        .padStart(2, "0")}`;
+      return `${pad(minutes)}:${pad(secs)}`;
     }
   }
 
@@ -588,137 +571,65 @@ export class VideoPlayer extends LitElement {
     this.isWideScreen = this.playerRef.offsetWidth >= 400; // Set threshold for "wide" screen
   }
 
-  private setupTimeline() {
-    // Clear existing timeline
-    if (this.timeline) {
-      this.timeline.destroy();
+  private setupEngine() {
+    if (!this.video || !this.src) return;
+
+    if (this.engine) {
+      this.engine.destroy();
     }
 
-    if (!this.src || !this.video) return;
-
-    // 开始加载时显示 loading
     this.isLoading = true;
-
-    const tl = new Timeline(this.video, { debug: this.debug });
-    this.timeline = tl;
     this.currentPosition = 0;
-    this.totalDuration = 0; // Reset duration when changing source
+    this.totalDuration = 0;
 
-    tl.load(this.src).then(() => {
-      this.singleFmp4 = tl.singleFmp4;
-      this.totalDuration = tl.totalDuration; // Update duration when loaded
-      this.dispatchEvent(new CustomEvent('segments', {
-        detail: tl.segments,
-        bubbles: true,
-        composed: true
-      }));
-      // 加载完成后隐藏 loading
+    this.engine = new Engine(this.video, { debug: this.debug, autoPlay: false });
+    this.engine.load(this.src).then(() => {
+      this.totalDuration = this.engine!.totalDuration;
       this.isLoading = false;
     }).catch((error) => {
       console.error('Failed to load video:', error);
-      // 加载失败也要隐藏 loading
       this.isLoading = false;
     });
   }
 
-  // Event handlers
   private updateTimelineUI = () => {
-    if (
-      !this.timelineRef ||
-      !this.progressRef ||
-      !this.bufferRef ||
-      !this.timeline
-    )
-      return;
+    if (!this.engine || !this.progressRef || !this.bufferRef) return;
 
-    this.currentPosition = this.timeline.position;
-
-    // Update totalDuration reactively
-    if (this.totalDuration !== this.timeline.totalDuration) {
-      this.totalDuration = this.timeline.totalDuration;
+    this.currentPosition = this.engine.position;
+    if (this.totalDuration !== this.engine.totalDuration) {
+      this.totalDuration = this.engine.totalDuration;
     }
 
-    const percentage = (this.timeline.position / this.totalDuration) * 100;
+    const percentage = (this.engine.position / this.totalDuration) * 100;
     this.progressRef.style.width = `${percentage}%`;
 
-    // Calculate buffered length as percentage of total duration
-    const bufferPercentage =
-      ((this.timeline.bufferedLength + this.timeline.position) /
-        this.totalDuration) *
-      100;
+    const bufferPercentage = (this.engine.bufferedLength / this.totalDuration) * 100;
     this.bufferRef.style.width = `${bufferPercentage}%`;
-
-    this.dispatchEvent(new CustomEvent('timeupdate', {
-      detail: this.timeline.position,
-      bubbles: true,
-      composed: true
-    }));
-
-    // Update playing state
-    this.isPlaying = !this.video?.paused;
   };
 
   private handleTimelineClick(event: MouseEvent) {
-    if (!this.timelineRef || !this.timeline) return;
+    if (!this.timelineRef || !this.engine) return;
 
     const rect = this.timelineRef.getBoundingClientRect();
     const clickPosition = (event.clientX - rect.left) / rect.width;
     const seekTime = clickPosition * this.totalDuration;
 
-    this.timeline.seek(seekTime);
+    this.engine.seek(seekTime);
     this.currentPosition = seekTime;
   }
 
-  private startDrag(event: MouseEvent) {
-    this.isDragging = true;
-    this.handleDrag(event);
+  private togglePlay() {
+    if (!this.video || !this.engine) return;
 
-    // Add event listeners for drag and drop
-    document.addEventListener('mousemove', this.handleDrag);
-    document.addEventListener('mouseup', this.stopDrag);
-  }
-
-  private handleDrag = (event: MouseEvent) => {
-    if (!this.isDragging || !this.timelineRef || !this.timeline) return;
-
-    const rect = this.timelineRef.getBoundingClientRect();
-    const dragPosition = (event.clientX - rect.left) / rect.width;
-    const seekTime = Math.max(
-      0,
-      Math.min(dragPosition * this.totalDuration, this.totalDuration)
-    );
-
-    this.currentPosition = seekTime;
-
-    // Update UI immediately without actually seeking yet
-    const percentage = (seekTime / this.totalDuration) * 100;
-    if (this.progressRef) {
-      this.progressRef.style.width = `${percentage}%`;
+    if (this.engine.isPlaying) {
+      this.engine.pause();
+    } else {
+      this.engine.play();
     }
-  };
-
-  private stopDrag = (event: MouseEvent) => {
-    if (!this.isDragging) return;
-
-    // Perform the actual seek
-    this.handleTimelineClick(event);
-
-    // Remove event listeners
-    document.removeEventListener('mousemove', this.handleDrag);
-    document.removeEventListener('mouseup', this.stopDrag);
-    this.isDragging = false;
-  };
-
-  private onTimelineMouseEnter() {
-    this.isHovering = true;
-  }
-
-  private onTimelineMouseLeave() {
-    this.isHovering = false;
   }
 
   private changePlaybackRate(rate: number) {
-    if (!this.video) return;
+    if (!this.video || !this.engine) return;
 
     this.playbackRate = rate;
     this.video.playbackRate = rate;
@@ -727,20 +638,6 @@ export class VideoPlayer extends LitElement {
 
   private togglePlaybackRateMenu() {
     this.showPlaybackRateMenu = !this.showPlaybackRateMenu;
-  }
-
-  private togglePlay() {
-    if (!this.video) return;
-
-    if (this.video.paused) {
-      this.isUserPaused = false;
-      this.video.play();
-      this.isPlaying = true;
-    } else {
-      this.isUserPaused = true;
-      this.video.pause();
-      this.isPlaying = false;
-    }
   }
 
   private toggleMute() {
@@ -814,18 +711,18 @@ export class VideoPlayer extends LitElement {
   }
 
   private seekForward() {
-    if (!this.timeline) return;
+    if (!this.engine) return;
 
-    const newTime = Math.min(this.timeline.position + 10, this.totalDuration);
-    this.timeline.seek(newTime);
+    const newTime = Math.min(this.engine.position + 10, this.totalDuration);
+    this.engine.seek(newTime);
     this.currentPosition = newTime;
   }
 
   private seekBackward() {
-    if (!this.timeline) return;
+    if (!this.engine) return;
 
-    const newTime = Math.max(this.timeline.position - 10, 0);
-    this.timeline.seek(newTime);
+    const newTime = Math.max(this.engine.position - 10, 0);
+    this.engine.seek(newTime);
     this.currentPosition = newTime;
   }
 
@@ -900,10 +797,18 @@ export class VideoPlayer extends LitElement {
     }
   };
 
+  private onTimelineMouseEnter() {
+    this.isHovering = true;
+  }
+
+  private onTimelineMouseLeave() {
+    this.isHovering = false;
+  }
+
   // Public methods
   seek(time: number) {
-    if (this.timeline) {
-      this.timeline.seek(time);
+    if (this.engine) {
+      this.engine.seek(time);
       this.currentPosition = time;
     }
   }
@@ -934,7 +839,7 @@ export class VideoPlayer extends LitElement {
         ` : ''}
 
         <!-- Custom timeline UI -->
-        ${this.timeline && !this.singleFmp4 ? html`
+        ${this.engine && !this.singleFmp4 ? html`
           <div
             class="controls-overlay ${this.showControls || this.isDragging ? 'show-controls' : ''}"
           >
@@ -1060,6 +965,46 @@ export class VideoPlayer extends LitElement {
       </div>
     `;
   }
+
+  private startDrag(event: MouseEvent) {
+    this.isDragging = true;
+    this.handleDrag(event);
+
+    // Add event listeners for drag and drop
+    document.addEventListener('mousemove', this.handleDrag);
+    document.addEventListener('mouseup', this.stopDrag);
+  }
+
+  private handleDrag = (event: MouseEvent) => {
+    if (!this.isDragging || !this.timelineRef || !this.engine) return;
+
+    const rect = this.timelineRef.getBoundingClientRect();
+    const dragPosition = (event.clientX - rect.left) / rect.width;
+    const seekTime = Math.max(
+      0,
+      Math.min(dragPosition * this.totalDuration, this.totalDuration)
+    );
+
+    this.currentPosition = seekTime;
+
+    // Update UI immediately without actually seeking yet
+    const percentage = (seekTime / this.totalDuration) * 100;
+    if (this.progressRef) {
+      this.progressRef.style.width = `${percentage}%`;
+    }
+  };
+
+  private stopDrag = (event: MouseEvent) => {
+    if (!this.isDragging) return;
+
+    // Perform the actual seek
+    this.handleTimelineClick(event);
+
+    // Remove event listeners
+    document.removeEventListener('mousemove', this.handleDrag);
+    document.removeEventListener('mouseup', this.stopDrag);
+    this.isDragging = false;
+  };
 }
 
 // Register the custom element after the class is defined

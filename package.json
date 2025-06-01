@@ -1,6 +1,6 @@
 {
   "name": "m7s-vod-player",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "",
   "main": "index.js",
   "type": "module",
@@ -17,9 +17,11 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "module": "src/timeline.ts",
+  "module": "src/engine.ts",
   "git": "https://github.com/langhuihui/m7s-vod-player.git",
   "dependencies": {
+    "eventemitter3": "^5.0.1",
+    "fastrx": "^3.2.6",
     "jv4-decoder": "^1.1.4",
     "lit": "^3.1.2",
     "vue": "^3.3.4"
