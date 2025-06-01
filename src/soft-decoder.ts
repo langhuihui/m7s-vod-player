@@ -1,13 +1,14 @@
 import { VideoDecoderSoftSIMD } from "jv4-decoder/src/video_decoder_soft_simd";
 import { VideoDecoderSoft } from "jv4-decoder/src/video_decoder_soft";
 import { AudioDecoderSoft } from "jv4-decoder/src/audio_decoder_soft";
+import { AudioDecoderHard } from 'jv4-decoder/src/audio_decoder_hard';
 import { VideoDecoderEvent, AudioDecoderEvent, type VideoCodecInfo } from "jv4-decoder/src/types";
 import { YuvRenderer } from "./yuv-renderer";
 
 
 export class SoftDecoder {
   videoDecoder: VideoDecoderSoft;
-  audioDecoder: AudioDecoderSoft;
+  audioDecoder: AudioDecoderSoft | AudioDecoderHard;
   canvas: HTMLCanvasElement;
   audioContext: AudioContext | null = null;
   videoBuffer: EncodedVideoChunkInit[] = [];
@@ -48,7 +49,8 @@ export class SoftDecoder {
       canvas: this.canvas,
       wasmPath,
     });
-    this.audioDecoder = new AudioDecoderSoft();
+    
+    this.audioDecoder = typeof AudioDecoder ==='undefined' ? new AudioDecoderSoft() : new AudioDecoderHard();
 
     this.videoDecoder.on(VideoDecoderEvent.VideoFrame, (videoFrame: VideoFrame) => {
       console.log('videoFrame', videoFrame);
