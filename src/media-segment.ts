@@ -104,84 +104,72 @@ export class MediaSegment extends EventEmitter {
     this.state = 'loaded';
   }
 
-  downgrade() {
-    
+  downgrade(decoder: SoftDecoder) {
+    this.load = async function (bufferProxy: SourceBufferProxy) {
+      if (this.state === 'init') {
+        this.state = 'loading';
+        if (!this.data) {
+          this.data = this.fetchWithProgress(this.url);
+        }
+        const data = await this.data;
+        this.tracks = this.fmp4Parser.parse(data);
+        this.state = 'buffering';
+      }
+      const videoTracks = this.tracks.filter(track => track.type === 'video');
+      const audioTracks = this.tracks.filter(track => track.type === 'audio');
+      for (const track of videoTracks) {
+        if (decoder.videoDecoder.state !== 'configured') {
+          await decoder.videoDecoder.initialize();
+          await decoder.videoDecoder.configure({
+            codec: track.codec.startsWith('avc1') ? 'avc' : 'hevc',
+            description: track.codecInfo?.extraData,
+          });
+          decoder.canvas.width = track.width ?? 1920;
+          decoder.canvas.height = track.height ?? 1080;
+        }
+        let timestamp = this.virtualStartTime * 1000;
+        track.samples.forEach(sample => {
+          decoder.decodeVideo({
+            data: sample.data,
+            timestamp,
+            type: sample.keyFrame ? 'key' : 'delta'
+          });
+          timestamp += sample.duration ?? 0;
+        });
+      }
+      for (const track of audioTracks) {
+        if (decoder.audioDecoder.state !== 'configured') {
+          await decoder.audioDecoder.initialize();
+          await decoder.audioDecoder.configure({
+            codec: 'aac',
+            description: track.codecInfo?.extraData,
+            numberOfChannels: track.channelCount ?? 2,
+            sampleRate: track.sampleRate ?? 44100,
+          });
+        }
+        let timestamp = this.virtualStartTime * 1000;
+        track.samples.forEach(sample => {
+          decoder.decodeAudio({
+            data: sample.data,
+            timestamp: timestamp,
+            type: 'key'
+          });
+          timestamp += sample.duration ?? 0;
+        });
+      }
+      this.state = 'buffered';
+    }
+    this.unBuffer = function () {
+      if (this.state === 'init') return;
+      delete this.ready;
+      this.state = 'loaded';
+      // Remove all frames within this segment's time range from decoder buffers
+      decoder.videoBuffer = decoder.videoBuffer.filter(x =>
+        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
+      );
+      decoder.audioBuffer = decoder.audioBuffer.filter(x =>
+        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
+      );
+    }
   }
 }
-
-export class SoftDecodedMediaSegment extends MediaSegment {
-  softDecoder?: SoftDecoder;
-
-  override async load(decoder: SoftDecoder | SourceBufferProxy) {
-    if (!(decoder instanceof SoftDecoder)) {
-      return super.load(decoder);
-    }
-
-    this.softDecoder = decoder;
-    if (this.state === 'init') {
-      this.state = 'loading';
-      if (!this.data) {
-        this.data = this.fetchWithProgress(this.url);
-      }
-      const data = await this.data;
-      this.tracks = this.fmp4Parser.parse(data);
-      this.state = 'buffering';
-    }
-    const videoTracks = this.tracks.filter(track => track.type === 'video');
-    const audioTracks = this.tracks.filter(track => track.type === 'audio');
-    for (const track of videoTracks) {
-      if (decoder.videoDecoder.state !== 'configured') {
-        await decoder.videoDecoder.initialize();
-        await decoder.videoDecoder.configure({
-          codec: track.codec.startsWith('avc1') ? 'avc' : 'hevc',
-          description: track.codecInfo?.extraData,
-        });
-        decoder.canvas.width = track.width ?? 1920;
-        decoder.canvas.height = track.height ?? 1080;
-      }
-      let timestamp = this.virtualStartTime * 1000;
-      track.samples.forEach(sample => {
-        decoder.decodeVideo({
-          data: sample.data,
-          timestamp,
-          type: sample.keyFrame ? 'key' : 'delta'
-        });
-        timestamp += sample.duration ?? 0;
-      });
-    }
-    for (const track of audioTracks) {
-      if (decoder.audioDecoder.state !== 'configured') {
-        await decoder.audioDecoder.initialize();
-        await decoder.audioDecoder.configure({
-          codec: 'aac',
-          description: track.codecInfo?.extraData,
-          numberOfChannels: track.channelCount ?? 2,
-          sampleRate: track.sampleRate ?? 44100,
-        });
-      }
-      let timestamp = this.virtualStartTime * 1000;
-      track.samples.forEach(sample => {
-        decoder.decodeAudio({
-          data: sample.data,
-          timestamp: timestamp,
-          type: 'key'
-        });
-        timestamp += sample.duration ?? 0;
-      });
-    }
-    this.state = 'buffered';
-  }
-
-  override unBuffer() {
-    super.unBuffer();
-    if (this.softDecoder) {
-      // Remove all frames within this segment's time range from decoder buffers
-      this.softDecoder.videoBuffer = this.softDecoder.videoBuffer.filter(x =>
-        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
-      );
-      this.softDecoder.audioBuffer = this.softDecoder.audioBuffer.filter(x =>
-        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
-      );
-    }
-  }
-} 

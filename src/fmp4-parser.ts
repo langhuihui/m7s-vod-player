@@ -1220,8 +1220,8 @@ export class Fmp4Parser {
       generalProfileSpace: (dataView.getUint8(offset + 1) >> 6) & 0x03,
       generalTierFlag: (dataView.getUint8(offset + 1) >> 5) & 0x01,
       generalProfileIdc: dataView.getUint8(offset + 1) & 0x1F,
-      generalProfileCompatibilityFlags: dataView.getUint32(offset + 2, false),
-      generalConstraintIndicatorFlags: new DataView(buffer, offset + 6, 6),
+      generalProfileCompatibilityFlags: dataView.getUint32(offset + 2),
+      generalConstraintIndicatorFlags: new Uint8Array(buffer, offset + 6, 6),
       generalLevelIdc: dataView.getUint8(offset + 12),
       minSpatialSegmentationIdc: dataView.getUint16(offset + 13, false) & 0x0FFF,
       parallelismType: dataView.getUint8(offset + 15) & 0x03
@@ -1306,6 +1306,20 @@ export class Fmp4Parser {
   }
 
   /**
+   * Reverse bits in a 32-bit number
+   */
+  private reverseBits(val: number): number {
+    let reversed = 0;
+    for (let i = 0; i < 32; i++) {
+      reversed |= val & 1;
+      if (i === 31) break;
+      reversed <<= 1;
+      val >>= 1;
+    }
+    return reversed;
+  }
+
+  /**
    * Generate codec string for MSE from codec specific box
    * @param boxes Array of parsed boxes
    * @returns Array of codec info objects containing codec strings and MIME types
@@ -1354,21 +1368,17 @@ export class Fmp4Parser {
                 generalLevelIdc
               } = data.hvcC;
 
-              // Format: hvc1.P.A.LB.B
-              // P: profile space and IDC
-              // A: constraints
-              // L: level IDC
-              // B: other constraints and flags
-              const profileSpace = ['', 'A', 'B', 'C'][generalProfileSpace] || '';
-              const profile = profileSpace + generalProfileIdc;
+              // Format: hvc1.1.2.L120.90
+              // 1: profile space and IDC
+              // 2: compatibility flags
+              // L120: level IDC
+              // 90: constraint flags
+              const profile = generalProfileIdc;
+              const compatibility = this.reverseBits(generalProfileCompatibilityFlags).toString(16);
+              const level = `L${generalLevelIdc}`;
+              const constraints = generalConstraintIndicatorFlags[0].toString(16).padStart(2, '0');
 
-              // Convert constraint flags to hex string
-              const constraints = generalConstraintIndicatorFlags.toString(16).padStart(6, '0');
-
-              // Level IDC as hex
-              const level = generalLevelIdc.toString(16).padStart(2, '0');
-
-              const codec = `${type}.${profile}.${constraints}.${level}`;
+              const codec = `${type}.${profile}.${compatibility}.${level}.${constraints}`;
 
               codecInfos.push({
                 codecString: codec,
