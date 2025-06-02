@@ -97,8 +97,13 @@ export class Engine extends EventEmitter {
                 }
             }
         }), catchError(err => {
+            this.log(err, 'downgrade')
             this.softDecoder = new SoftDecoder('', { yuvMode: true })
             this.video.srcObject = this.softDecoder.canvas.captureStream();
+            this.segments.forEach(segment => segment.downgrade(this.softDecoder!))
+            mediaSourceProxy.appendSegment(this.currentSegment).then(() => {
+                this.softDecoder?.processInitialFrame();
+              });
             pipe(fromEvent(video, 'pause'), subscribe(() => {
                 this.softDecoder?.stop()
             }))
@@ -113,6 +118,7 @@ export class Engine extends EventEmitter {
 
         pipe(fromEvent(video, 'timeupdate'), takeUntil(this.destroyOB), subscribe(() => {
             this.position = video.currentTime + offset;
+            if (!this.currentSegment) return
             const nextSegment = this.segments[this.currentSegment.index + 1];
             if (nextSegment && !nextSegment.ready) {
                 this.log('Loading next segment:', nextSegment);
