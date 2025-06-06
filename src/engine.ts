@@ -69,11 +69,11 @@ export class Engine extends EventEmitter {
                     if (sink.disposed) return
                     const bufferStart = this.bufferStart;
                     const bufferEnd = this.bufferEnd;
-                    this.log('Appending segment:', currentSegment);
+                    this.log('Appending segment:', currentSegment, `[${bufferStart},${bufferEnd}]`);
                     const appended = await mediaSourceProxy.appendSegment(currentSegment);
                     if (sink.disposed) return
                     if (appended) {
-                        this.log('Segment appended successfully');
+                        this.log('Segment appended successfully', `[${this.bufferStart},${this.bufferEnd}]`);
                         this.segments.filter(segment => segment.ready && segment != currentSegment).forEach(segment => {
                             this.log('Unbuffering segment:', segment);
                             segment.unBuffer()
@@ -84,8 +84,9 @@ export class Engine extends EventEmitter {
                             if (sink.disposed) return
                         }
                         const targetTime = offsetInSegment + bufferEnd
+                        this.log(`target: ${targetTime} = currentTime: ${video.currentTime} + unplayed: ${bufferEnd - video.currentTime} + offsetInSegment: ${offsetInSegment}`)
                         offset = time - targetTime;
-                        this.log('New offset calculated:', offset, 'target:', targetTime, 'position:', time);
+                        this.log('New offset calculated:', offset, `= time: ${time} - targetTime: ${targetTime}`);
                     }
                     const targetTime = time - offset;
                     this.log("Buffer:", `[${this.bufferStart},${this.bufferEnd}]`, "Target:", targetTime)
@@ -103,7 +104,7 @@ export class Engine extends EventEmitter {
             this.segments.forEach(segment => segment.downgrade(this.softDecoder!))
             mediaSourceProxy.appendSegment(this.currentSegment).then(() => {
                 this.softDecoder?.processInitialFrame();
-              });
+            });
             pipe(fromEvent(video, 'pause'), subscribe(() => {
                 this.softDecoder?.stop()
             }))
@@ -118,11 +119,13 @@ export class Engine extends EventEmitter {
 
         pipe(fromEvent(video, 'timeupdate'), takeUntil(this.destroyOB), subscribe(() => {
             this.position = video.currentTime + offset;
+            this.log('timeupdate', video.currentTime);
             if (!this.currentSegment) return
             const nextSegment = this.segments[this.currentSegment.index + 1];
             if (nextSegment && !nextSegment.ready) {
-                this.log('Loading next segment:', nextSegment);
+                this.log('Loading next segment:', nextSegment, `[${this.bufferStart},${this.bufferEnd}]`);
                 segmentLoading = mediaSourceProxy.appendSegment(nextSegment);
+                segmentLoading.then(() => this.log('Segment loaded:', nextSegment, `[${this.bufferStart},${this.bufferEnd}]`));
             }
         }));
 

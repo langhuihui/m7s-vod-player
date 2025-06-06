@@ -397,6 +397,10 @@ onMounted(() => {
     isLoading.value = false;
   });
 
+  video.value.addEventListener('waiting', () => {
+    isLoading.value = true
+  })
+
   // Initialize volume
   video.value.volume = volume.value;
 
