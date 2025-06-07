@@ -41,6 +41,10 @@ const isVolumeDragging = ref(false);
 const singleFmp4 = ref(false);
 const isWideScreen = ref(true); // Added for responsive control
 const isLoading = ref(false); // Loading 状态
+// Add new refs for tooltip
+const tooltipPosition = ref({ x: 0, y: 0 });
+const tooltipTime = ref('');
+const showTooltip = ref(false);
 
 // Expose video element to parent component
 defineExpose({
@@ -166,10 +170,27 @@ function stopDrag(event: MouseEvent) {
 
 function onTimelineMouseEnter() {
   isHovering.value = true;
+  showTooltip.value = true;
 }
 
 function onTimelineMouseLeave() {
   isHovering.value = false;
+  showTooltip.value = false;
+}
+
+function handleTimelineMouseMove(event: MouseEvent) {
+  if (!timelineRef.value || !engine.value) return;
+
+  const rect = timelineRef.value.getBoundingClientRect();
+  const mousePosition = (event.clientX - rect.left) / rect.width;
+  const time = mousePosition * totalDuration.value;
+  
+  // Update tooltip position and time
+  tooltipPosition.value = {
+    x: event.clientX - rect.left,
+    y: -30 // Position above the timeline
+  };
+  tooltipTime.value = formatTime(time);
 }
 
 function changePlaybackRate(rate: number) {
@@ -449,13 +470,23 @@ onUnmounted(() => {
     <!-- Custom timeline UI -->
     <div v-if="engine && !singleFmp4" class="controls-overlay" :class="{ 'show-controls': showControls || isDragging }">
       <!-- Timeline slider -->
-      <div class="timeline" ref="timelineRef" @click="handleTimelineClick" @mouseenter="onTimelineMouseEnter"
-        @mouseleave="onTimelineMouseLeave" :class="{ 'timeline-hover': isHovering }">
+      <div class="timeline" ref="timelineRef" @click="handleTimelineClick" 
+        @mouseenter="onTimelineMouseEnter"
+        @mousemove="handleTimelineMouseMove"
+        @mouseleave="onTimelineMouseLeave" 
+        :class="{ 'timeline-hover': isHovering }">
         <div class="timeline-buffer" ref="bufferRef"></div>
         <div class="timeline-progress" ref="progressRef"></div>
         <div class="timeline-handle" :class="{ 'timeline-handle-hover': isHovering || isDragging }" :style="{
           left: `${(currentPosition / (totalDuration || 1)) * 100}%`,
         }" @mousedown.stop="startDrag"></div>
+        <!-- Add tooltip -->
+        <div v-show="showTooltip" class="timeline-tooltip" :style="{
+          left: `${tooltipPosition.x}px`,
+          top: `${tooltipPosition.y}px`
+        }">
+          {{ tooltipTime }}
+        </div>
       </div>
 
       <!-- Controls -->
@@ -616,39 +647,62 @@ video {
 
 .timeline {
   position: relative;
+  height: 20px;
+  background: transparent;
+  border-radius: 1.5px;
+  cursor: pointer;
+  overflow: visible;
+  margin-bottom: 10px;
+  transition: height 0.2s ease;
+  display: flex;
+  align-items: center;
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
   height: 3px;
   background: rgba(255, 255, 255, 0.3);
   border-radius: 1.5px;
-  cursor: pointer;
-  overflow: hidden;
-  margin-bottom: 10px;
   transition: height 0.2s ease;
 }
 
-.timeline-hover {
+.timeline-hover::before {
   height: 5px;
 }
 
 .timeline-buffer {
   position: absolute;
-  height: 100%;
+  height: 3px;
   background-color: rgba(255, 255, 255, 0.5);
   width: 0;
   pointer-events: none;
+  transition: height 0.2s ease;
+}
+
+.timeline-hover .timeline-buffer {
+  height: 5px;
 }
 
 .timeline-progress {
   position: absolute;
-  height: 100%;
+  height: 3px;
   background-color: #fb7299;
   width: 0;
   pointer-events: none;
+  transition: height 0.2s ease;
+}
+
+.timeline-hover .timeline-progress {
+  height: 5px;
 }
 
 .timeline-handle {
   position: absolute;
-  height: 8px;
-  width: 8px;
+  height: 12px;
+  width: 12px;
   border-radius: 50%;
   background: #fb7299;
   top: 50%;
@@ -660,8 +714,8 @@ video {
 
 .timeline-handle-hover {
   transform: translate(-50%, -50%) scale(1);
-  height: 12px;
-  width: 12px;
+  height: 16px;
+  width: 16px;
   box-shadow: 0 0 0 4px rgba(251, 114, 153, 0.2);
   cursor: grab;
   pointer-events: auto;
@@ -881,5 +935,32 @@ video {
   font-size: 14px;
   font-weight: 500;
   text-align: center;
+}
+
+/* Update tooltip styles */
+.timeline-tooltip {
+  position: absolute;
+  background-color: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 1000;
+  transition: opacity 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.timeline-tooltip::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 4px solid rgba(0, 0, 0, 0.9);
 }
 </style>

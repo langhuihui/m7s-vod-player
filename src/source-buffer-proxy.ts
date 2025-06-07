@@ -6,7 +6,7 @@ export class SourceBufferProxy {
   currentWaiting?: () => void;
   currentError = console.log;
   sourceBuffer!: SourceBuffer;
-  constructor(private mediaSource: MediaSource) {
+  constructor(public mediaSource: MediaSource) {
   }
   get initialized() {
     return !!this.sourceBuffer;

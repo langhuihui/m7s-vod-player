@@ -14,18 +14,8 @@ export class MediaSourceProxy extends EventEmitter {
         video.src = this.urlSource
     }
 
-    async appendSegment(segment: MediaSegment): Promise<boolean> {
-        if (this.mediaSource.readyState !== 'open') return false
-        if (!this.sourceBufferProxy) {
-            throw new Error('SourceBufferProxy not initialized');
-        }
-        if (!segment.ready) {
-            segment.ready = segment.load(this.sourceBufferProxy);
-            await segment.ready;
-            return true;
-        }
-        await segment.ready;
-        return false;
+    appendSegment(segment: MediaSegment) {
+        return segment.load(this.sourceBufferProxy, this.ready);
     }
 
     async removeBuffer(start: number, end: number): Promise<void> {

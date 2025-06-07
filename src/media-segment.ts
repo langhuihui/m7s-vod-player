@@ -1,3 +1,4 @@
+import { buffer, ISink } from "fastrx";
 import { Fmp4Parser, Track } from "./fmp4-parser";
 import { SoftDecoder } from "./soft-decoder";
 import { SourceBufferProxy } from "./source-buffer-proxy";
@@ -21,11 +22,9 @@ export class MediaSegment extends EventEmitter {
   virtualEndTime: number;   // 虚拟时间轴上的结束时间
   physicalTime: Date | null; // 物理时间（从EXTINF中解析）
   data?: Promise<ArrayBuffer>;       // 片段的二进制数据
-  state: 'init' | 'loading' | 'loaded' | 'buffering' | 'buffered' = 'init';
   fmp4Parser = new Fmp4Parser(false);
   tracks: Track[] = [];
   loadingProgress: LoadingProgress = { loaded: 0, total: 0 };
-  ready?: Promise<void>;
   constructor(public index: number, info: MediaSegmentInfo) {
     super();
     this.url = info.url;
@@ -72,38 +71,34 @@ export class MediaSegment extends EventEmitter {
     return chunksAll.buffer;
   }
 
-  async load(bufferProxy: SourceBufferProxy) {
-    this.state = 'loading';
-    if (!this.data) {
-      this.data = this.fetchWithProgress(this.url);
-    }
-    const data = await this.data;
-    if (this.tracks.length === 0) {
-      this.tracks = this.fmp4Parser.parse(data);
-    }
-    if (!bufferProxy.initialized) {
-      const codec = `video/mp4; codecs="${this.tracks.map(track => track.codec).join(', ')}"`;
-      if (MediaSource.isTypeSupported(codec)) {
-        bufferProxy.init(codec);
-      } else {
-        throw new Error(`Unsupported codec: ${codec}`);
+  load(bufferProxy: SourceBufferProxy, ready: Promise<void>) {
+    return async (sink: ISink<boolean>) => {
+      console.log('load', this.index);
+      if (!this.data) this.data = this.fetchWithProgress(this.url);
+      const data = await this.data;
+      if (this.tracks.length === 0) {
+        this.tracks = this.fmp4Parser.parse(data);
       }
+      if (sink.disposed) return
+      await ready;
+      if (sink.disposed) return
+      if (!bufferProxy.initialized) {
+        const codec = `video/mp4; codecs="${this.tracks.map(track => track.codec).join(', ')}"`;
+        if (MediaSource.isTypeSupported(codec)) {
+          bufferProxy.init(codec);
+        } else {
+          sink.error(new Error(`Unsupported codec: ${codec}`));
+          return;
+        }
+      }
+      await bufferProxy.appendBuffer({ data, tracks: this.tracks });
+      sink.next(true);
+      sink.complete();
     }
-    if (this.state !== 'loading') {
-      // 取消appendBuffer
-      return;
-    }
-    this.state = 'buffering';
-    await bufferProxy.appendBuffer({ data, tracks: this.tracks });
-    this.state = 'buffered';
   }
-
   unBuffer() {
-    if (this.state === 'init') return;
-    delete this.ready;
-    this.state = 'loaded';
-  }
 
+  }
   downgrade(decoder: SoftDecoder) {
     this.load = async function (bufferProxy: SourceBufferProxy) {
       if (this.state === 'init') {
@@ -160,9 +155,6 @@ export class MediaSegment extends EventEmitter {
       this.state = 'buffered';
     }
     this.unBuffer = function () {
-      if (this.state === 'init') return;
-      delete this.ready;
-      this.state = 'loaded';
       // Remove all frames within this segment's time range from decoder buffers
       decoder.videoBuffer = decoder.videoBuffer.filter(x =>
         x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
