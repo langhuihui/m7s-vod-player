@@ -54,57 +54,65 @@ export class Engine extends EventEmitter {
             debug: this.debug,
         });
 
-        pipe(this.seekOB, switchMap(time => {
-            this.log('Seek requested to time:', time);
+        const errorOB = pipe(fromEvent(video, 'error'), map(() => {
+            const position = this.position;
+            mediaSourceProxy.reset();
+            this.offset = 0;
+            return position + 1;
+        }));
+
+        const waitOB = pipe(fromEvent(video, 'waiting'), filter(() => this.totalDuration - this.position < 1), map(() => {
+            mediaSourceProxy.reset();
+            this.offset = 0;
+            this.pause();
+            return 0;
+        }));
+
+        const seekOP = (time: number) => {
             this.position = time;
-            const currentSegment = this.currentSegment;
+            const { currentSegment, bufferStart, bufferEnd } = this;
             const offsetInSegment = time - currentSegment.virtualStartTime;
+            const targetTime = offsetInSegment + bufferEnd;
+            this.log('Seek requested to time:', time, `[${bufferStart},${bufferEnd}]`, 'offsetInSegment', offsetInSegment, 'targetTime', targetTime);
             const loadSequence = concat(...this.segments.slice(currentSegment.index + 1).map(segment => mediaSourceProxy.appendSegment(segment)));
-            this.log('Offset in segment:', offsetInSegment);
             video.pause();
-            const targetTime = offsetInSegment + this.bufferEnd;
             this.offset = time - targetTime;
-            const [bufferStart, bufferEnd] = [this.bufferStart, this.bufferEnd];
             return pipe(mediaSourceProxy.appendSegment(currentSegment), tap(() => {
                 video.currentTime = targetTime;
                 if (bufferEnd > bufferStart) mediaSourceProxy.removeBuffer(bufferStart, bufferEnd);
                 if (this.isPlaying) video.play();
+                video.playbackRate = this._playbackRate;
             }), switchMapTo(merge(fromEvent(this.video, 'timeupdate'), loadSequence)));
-        }), catchError(err => {
-            console.error(err);
-            this.log(err, 'downgrade');
-            // this.softDecoder = new SoftDecoder('', { yuvMode: true });
-            // this.video.srcObject = this.softDecoder.canvas.captureStream();
-            // this.segments.forEach(segment => segment.downgrade(this.softDecoder!));
-            // mediaSourceProxy.appendSegment(this.currentSegment).then(() => {
-            //     this.softDecoder?.processInitialFrame();
-            // });
-            // pipe(fromEvent(video, 'pause'), subscribe(() => {
-            //     this.softDecoder?.stop();
-            // }));
-            return never();
-        }), takeUntil(this.destroyOB), subscribe(() => {
+        }
+
+        const seekSoftOP = (time: number) => {
+            this.position = time;
+            const { currentSegment, softDecoder } = this;
+            const loadSequence = concat(...this.segments.slice(currentSegment.index + 1).map(segment => mediaSourceProxy.appendSegment(segment)));
+            video.pause();
+            return pipe(mediaSourceProxy.appendSegment(currentSegment), tap(() => {
+                if (this.isPlaying) {
+                    this.log('processInitialFrame', softDecoder?.videoBuffer.length);
+                    softDecoder?.processInitialFrame();
+                    video.play().then(() => {
+                        softDecoder?.start()
+                        softDecoder?.seek(time)
+                    })
+                }
+            }), switchMapTo(merge(fromEvent(this.video, 'timeupdate'), loadSequence)));
+        }
+
+        pipe(merge(this.seekOB, errorOB, waitOB), switchMap(seekOP), takeUntil(this.destroyOB), subscribe(() => {
             this.position = video.currentTime + this.offset;
-        }));
-
-
-        pipe(fromEvent(video, 'error'), takeUntil(this.destroyOB), subscribe(() => {
-            const position = this.position;
-            mediaSourceProxy.reset();
-            this.segments.forEach(segment => segment.unBuffer());
-            this.offset = 0;
-            this.seek(position + 1);
-            video.playbackRate = this._playbackRate;
-        }));
-
-        pipe(fromEvent(video, 'waiting'), takeUntil(this.destroyOB), subscribe(() => {
-            if (this.totalDuration - this.position < 1) {
-                mediaSourceProxy.reset();
-                this.segments.forEach(segment => segment.unBuffer());
-                this.offset = 0;
-                this.pause();
-                this.seek(0);
-            }
+        }, err => {
+            this.log(err, 'downgrade');
+            this.softDecoder = new SoftDecoder('', { yuvMode: true });
+            this.video.srcObject = this.softDecoder.canvas.captureStream();
+            this.segments.forEach(segment => segment.downgrade(this.softDecoder!));
+            pipe(this.seekOB, switchMap(seekSoftOP), takeUntil(this.destroyOB), subscribe(() => {
+                this.position = (this.softDecoder?.getCurrentTime() ?? 0) / 1000;
+            }))
+            this.seekOB.next(this.position);
         }));
     }
     get bufferedLength() {
@@ -152,6 +160,7 @@ export class Engine extends EventEmitter {
         this.log('Pause requested');
         this.isPlaying = false;
         this.video.pause();
+        this.softDecoder?.stop();
     }
 
     seek(time: number) {

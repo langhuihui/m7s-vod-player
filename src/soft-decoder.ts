@@ -49,14 +49,14 @@ export class SoftDecoder {
       canvas: this.canvas,
       wasmPath,
     });
-    
-    this.audioDecoder = typeof AudioDecoder ==='undefined' ? new AudioDecoderSoft() : new AudioDecoderHard();
+
+    this.audioDecoder = typeof AudioDecoder === 'undefined' ? new AudioDecoderSoft() : new AudioDecoderHard();
 
     this.videoDecoder.on(VideoDecoderEvent.VideoFrame, (videoFrame: VideoFrame) => {
       console.log('videoFrame', videoFrame);
       if (this.yuvRenderer) {
-        const yuvData = videoFrame as unknown as [y: Uint8Array, u: Uint8Array, v: Uint8Array];
-        this.yuvRenderer.render(yuvData[0], yuvData[1], yuvData[2], this.canvas.width, this.canvas.width / 2);
+        const { y, u, v } = videoFrame as unknown as { y: Uint8Array, u: Uint8Array, v: Uint8Array };
+        this.yuvRenderer.render(y, u, v, this.canvas.width, this.canvas.width / 2);
       } else if (this.gl) {
         // Use 2D canvas for RGB frames
         this.gl.drawImage(videoFrame, 0, 0);
@@ -272,9 +272,6 @@ export class SoftDecoder {
     if (!this.isPlaying) return;
 
     const currentTime = this.getCurrentTime();
-    if (this.videoBuffer.length) {
-      console.log(this.videoBuffer.length, this.videoBuffer[this.videoBuffer.length - 1].timestamp, currentTime);
-    }
 
     // Handle seeking
     if (this.seekTime !== null) {

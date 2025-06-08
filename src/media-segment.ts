@@ -71,14 +71,19 @@ export class MediaSegment extends EventEmitter {
     return chunksAll.buffer;
   }
 
+  async _load() {
+    console.log('load', this.index);
+    if (!this.data) this.data = this.fetchWithProgress(this.url);
+    const data = await this.data;
+    if (this.tracks.length === 0) {
+      this.tracks = this.fmp4Parser.parse(data);
+    }
+    return data;
+  }
+
   load(bufferProxy: SourceBufferProxy, ready: Promise<void>) {
     return async (sink: ISink<boolean>) => {
-      console.log('load', this.index);
-      if (!this.data) this.data = this.fetchWithProgress(this.url);
-      const data = await this.data;
-      if (this.tracks.length === 0) {
-        this.tracks = this.fmp4Parser.parse(data);
-      }
+      const data = await this._load();
       if (sink.disposed) return
       await ready;
       if (sink.disposed) return
@@ -91,77 +96,71 @@ export class MediaSegment extends EventEmitter {
           return;
         }
       }
-      await bufferProxy.appendBuffer({ data, tracks: this.tracks });
-      sink.next(true);
-      sink.complete();
+      // sink.error(new Error('test'));
+      // return;
+      try {
+        await bufferProxy.appendBuffer({ data, tracks: this.tracks });
+        sink.next(true);
+        sink.complete();
+      } catch (err) {
+        sink.error(err);
+      }
     }
-  }
-  unBuffer() {
-
   }
   downgrade(decoder: SoftDecoder) {
-    this.load = async function (bufferProxy: SourceBufferProxy) {
-      if (this.state === 'init') {
-        this.state = 'loading';
-        if (!this.data) {
-          this.data = this.fetchWithProgress(this.url);
-        }
-        const data = await this.data;
-        this.tracks = this.fmp4Parser.parse(data);
-        this.state = 'buffering';
-      }
-      const videoTracks = this.tracks.filter(track => track.type === 'video');
-      const audioTracks = this.tracks.filter(track => track.type === 'audio');
-      for (const track of videoTracks) {
-        if (decoder.videoDecoder.state !== 'configured') {
-          await decoder.videoDecoder.initialize();
-          await decoder.videoDecoder.configure({
-            codec: track.codec.startsWith('avc1') ? 'avc' : 'hevc',
-            description: track.codecInfo?.extraData,
-          });
-          decoder.canvas.width = track.width ?? 1920;
-          decoder.canvas.height = track.height ?? 1080;
-        }
-        let timestamp = this.virtualStartTime * 1000;
-        track.samples.forEach(sample => {
-          decoder.decodeVideo({
-            data: sample.data,
-            timestamp,
-            type: sample.keyFrame ? 'key' : 'delta'
-          });
-          timestamp += sample.duration ?? 0;
-        });
-      }
-      for (const track of audioTracks) {
-        if (decoder.audioDecoder.state !== 'configured') {
-          await decoder.audioDecoder.initialize();
-          await decoder.audioDecoder.configure({
-            codec: 'aac',
-            description: track.codecInfo?.extraData,
-            numberOfChannels: track.channelCount ?? 2,
-            sampleRate: track.sampleRate ?? 44100,
+    this.load = function () {
+      return async (sink: ISink<boolean>) => {
+        await this._load();
+        if (sink.disposed) return
+        const videoTracks = this.tracks.filter(track => track.type === 'video');
+        const audioTracks = this.tracks.filter(track => track.type === 'audio');
+        for (const track of videoTracks) {
+          if (decoder.videoDecoder.state !== 'configured') {
+            await decoder.videoDecoder.initialize();
+            if (sink.disposed) return
+            await decoder.videoDecoder.configure({
+              codec: track.codec.startsWith('avc1') ? 'avc' : 'hevc',
+              description: track.codecInfo?.extraData,
+            });
+            if (sink.disposed) return
+            decoder.canvas.width = track.width ?? 1920;
+            decoder.canvas.height = track.height ?? 1080;
+          }
+          let timestamp = this.virtualStartTime * 1000;
+          track.samples.forEach(sample => {
+            decoder.decodeVideo({
+              data: sample.data,
+              timestamp,
+              type: sample.keyFrame ? 'key' : 'delta'
+            });
+            timestamp += sample.duration ?? 0;
           });
         }
-        let timestamp = this.virtualStartTime * 1000;
-        track.samples.forEach(sample => {
-          decoder.decodeAudio({
-            data: sample.data,
-            timestamp: timestamp,
-            type: 'key'
+        for (const track of audioTracks) {
+          if (decoder.audioDecoder.state !== 'configured') {
+            await decoder.audioDecoder.initialize();
+            if (sink.disposed) return
+            await decoder.audioDecoder.configure({
+              codec: 'aac',
+              description: track.codecInfo?.extraData,
+              numberOfChannels: track.channelCount ?? 2,
+              sampleRate: track.sampleRate ?? 44100,
+            });
+            if (sink.disposed) return
+          }
+          let timestamp = this.virtualStartTime * 1000;
+          track.samples.forEach(sample => {
+            decoder.decodeAudio({
+              data: sample.data,
+              timestamp: timestamp,
+              type: 'key'
+            });
+            timestamp += sample.duration ?? 0;
           });
-          timestamp += sample.duration ?? 0;
-        });
+        }
+        sink.next(true);
+        sink.complete();
       }
-      this.state = 'buffered';
-    }
-    this.unBuffer = function () {
-      // Remove all frames within this segment's time range from decoder buffers
-      decoder.videoBuffer = decoder.videoBuffer.filter(x =>
-        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
-      );
-      decoder.audioBuffer = decoder.audioBuffer.filter(x =>
-        x.timestamp < this.virtualStartTime * 1000 || x.timestamp >= this.virtualEndTime * 1000
-      );
     }
   }
 }
