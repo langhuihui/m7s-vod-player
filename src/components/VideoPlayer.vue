@@ -386,12 +386,14 @@ onMounted(() => {
 
   // Listen for play and pause events to update state
   video.value.addEventListener("play", () => {
+    console.log("Video started playing");
     isPlaying.value = true;
     // 当视频播放时，隐藏 loading
     isLoading.value = false;
   });
 
   video.value.addEventListener("pause", () => {
+    console.log("Video paused");
     isPlaying.value = false;
     // 当视频暂停时，只有在 engine 正在播放状态下才显示 loading
     if (engine.value?.isPlaying) {
@@ -401,12 +403,14 @@ onMounted(() => {
 
   // 监听视频的 canplay 事件（可以播放）
   video.value.addEventListener("canplay", () => {
+    console.log("Video can play");
     // 当视频可以播放时，隐藏 loading
     isLoading.value = false;
   });
 
   // 监听视频的 playing 事件（正在播放）
   video.value.addEventListener("playing", () => {
+    console.log("Video is playing");
     // 当视频开始播放时，隐藏 loading
     isLoading.value = false;
   });
@@ -419,6 +423,7 @@ onMounted(() => {
   });
 
   video.value.addEventListener('waiting', () => {
+    console.log("Video is waiting for data");
     isLoading.value = true
   })
 

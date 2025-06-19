@@ -12,8 +12,8 @@ importers:
         specifier: ^5.0.1
         version: 5.0.1
       fastrx:
-        specifier: ^3.2.6
-        version: 3.2.6
+        specifier: ^3.3.0
+        version: 3.3.0
       jv4-decoder:
         specifier: ^1.1.4
         version: 1.1.5
@@ -1132,8 +1132,8 @@ packages:
     resolution: {integrity: sha512-8uSpZZocAZRBAPIEINJj3Lo9HyGitllczc27Eh5YYojjMFMn8yHMDMaUHE2Jqfq05D/wucwI4JGURyXt1vchyg==}
     engines: {node: '>=10'}
 
-  fastrx@3.2.6:
-    resolution: {integrity: sha512-NuPKfZyImU0zpL4ZgSQnhUz9M4E7OUAJ46LJVFI5+0KdvB/S9Ll/2ZWA1kwN91TyHUQy59+ALPcasg8aK7Oaqg==}
+  fastrx@3.3.0:
+    resolution: {integrity: sha512-bu4KZdLoiptY68opFRsTe6NLa/KoMaBkypVy+/q21R9LnJVJ8EHGK1H4NcBZ1yOeh2/2ogLO71Woq65uEOVhnA==}
 
   fill-range@7.1.1:
     resolution: {integrity: sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg==}
@@ -2822,7 +2822,7 @@ snapshots:
       signal-exit: 3.0.7
       strip-final-newline: 2.0.0
 
-  fastrx@3.2.6:
+  fastrx@3.3.0:
     dependencies:
       core-js: 3.42.0
 
