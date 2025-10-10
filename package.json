@@ -1,15 +1,18 @@
 {
   "name": "m7s-vod-player",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:react": "vite --config vite-react.config.ts",
     "build": "vite build",
     "build:lit": "vite build --config vite-lit.config.ts",
+    "build:react": "vite build --config vite-react.config.ts",
     "type-check": "vue-tsc --noEmit",
     "preview": "vite preview",
+    "preview:react": "vite preview --outDir dist-react",
     "test:cdp": "node src/cdp-test.js",
     "test:fmp4": "node src/cdp-fmp4-test.js",
     "serve": "wds --config web-dev-server.config.js"
@@ -24,6 +27,8 @@
     "fastrx": "^3.3.0",
     "jv4-decoder": "^1.1.4",
     "lit": "^3.1.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "vue": "^3.3.4"
   },
   "devDependencies": {
@@ -33,6 +38,9 @@
     "@babel/plugin-proposal-decorators": "^7.24.1",
     "@babel/plugin-transform-class-properties": "^7.24.1",
     "@types/dom-webcodecs": "^0.1.11",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
     "@vitejs/plugin-vue": "^4.5.2",
     "@vue/tsconfig": "^0.7.0",
     "@web/dev-server": "^0.4.6",

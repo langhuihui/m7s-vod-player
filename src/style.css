@@ -58,11 +58,27 @@ button:focus-visible {
   padding: 2em;
 }
 
-#app {
+#app, #root {
   max-width: 1280px;
   margin: 0 auto;
   padding: 2rem;
   text-align: center;
+}
+
+.url-input {
+  width: 100%;
+  padding: 0.5em;
+  font-size: 1em;
+  border: 1px solid #646cff;
+  border-radius: 4px;
+  background-color: #1a1a1a;
+  color: rgba(255, 255, 255, 0.87);
+  box-sizing: border-box;
+}
+
+.url-input:focus {
+  outline: 2px solid #646cff;
+  outline-offset: 2px;
 }
 
 @media (prefers-color-scheme: light) {
@@ -75,5 +91,9 @@ button:focus-visible {
   }
   button {
     background-color: #f9f9f9;
+  }
+  .url-input {
+    background-color: #ffffff;
+    color: #213547;
   }
 }
